@@ -1,10 +1,11 @@
+use core::f64;
 use std::f64::MAX_EXP;
 
 use crate::Sampler::{Normal, SupervisedNormal, _SeriesGAN};
 use nalgebra::base::dimension::{Const, Dyn};
 use nalgebra::{DMatrix, DVector, Matrix, VecStorage};
 use rand::distributions::Uniform;
-use rand::prelude::*;
+use rand::{prelude::*, Error};
 use statrs::distribution::{Continuous, MultivariateNormal};
 use statrs::statistics::{MeanN, VarianceN};
 use std::sync::LazyLock;
@@ -39,9 +40,7 @@ impl Sampler {
                     .sample_iter(&mut rng)
                     .take(*number_of_steps + look_ahead)
                     .collect::<Vec<_>>();
-                let supervised_sequence =
-                    Sampler::supervise_sequence(raw_normal_sequence, *look_ahead);
-                supervised_sequence
+                Sampler::supervise_sequence(raw_normal_sequence, *look_ahead) //returns supervised_sequence
             }
             Sampler::_SeriesGAN(number_of_steps) => {
                 //
@@ -55,8 +54,22 @@ impl Sampler {
         }
     }
     // SUPERVISOR FUNCTIONS
-    fn find_min_max(raw_sequence: &Vec<DVector<f64>>) -> Vec<(f64, f64)> {
-        vec![(1., 1.)]
+    fn find_min_max(raw_sequence: &Vec<DVector<f64>>) -> Result<Vec<(f64, f64)>, &str> {
+        if raw_sequence.is_empty() {
+            return Err("Passed an empty sequence to supervisor");
+        }
+        let dimension = raw_sequence[0].len(); // access first row and then check the number of elements
+                                               // must be in this order so that any value is less than INFINITY, and any value is bigger than NEG_INFINITY
+        let mut min_max = vec![(f64::INFINITY, f64::NEG_INFINITY); dimension];
+
+        for row in raw_sequence.iter() {
+            for (col_idx, &value) in row.iter().enumerate() {
+                let (min, max) = &mut min_max[col_idx];
+                *min = (*min).min(value);
+                *max = (*max).max(value);
+            }
+        }
+        Ok(min_max)
     }
     fn supervisor_pass(
         preprocessed_sequence: Vec<DVector<f64>>,
@@ -65,7 +78,8 @@ impl Sampler {
         vec![vec![1., 1., 1.]]
     }
     fn supervise_sequence(raw_sequence: Vec<DVector<f64>>, look_ahead: usize) -> Vec<DVector<f64>> {
-        let min_max_columns = Sampler::find_min_max(&raw_sequence);
+        let min_max_columns = Sampler::find_min_max(&raw_sequence)
+            .expect("A list of tuples containing the Min-Max of each column");
 
         // // Define helper functions
         let min_max_scaling = |value: f64, min: f64, max: f64| (value - min) / (max - min);
