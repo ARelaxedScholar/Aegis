@@ -11,7 +11,7 @@ use std::sync::LazyLock;
 use tch::{nn, CModule, Kind, TchError, Tensor};
 
 static SUPERVISOR: LazyLock<Result<CModule, TchError>> =
-    LazyLock::new(|| CModule::load("/model_weights/supervisor.pt"));
+    LazyLock::new(|| CModule::load("../model_weights/supervisor.pt"));
 
 // // Sampler Code
 enum Sampler {
@@ -61,7 +61,7 @@ impl Sampler {
         }
     }
     // SUPERVISOR FUNCTIONS
-    fn find_min_max(raw_sequence: &Vec<DVector<f64>>) -> Result<(Vec<(f64, f64)>, usize), String> {
+    fn find_min_max(raw_sequence: &[DVector<f64>]) -> Result<(Vec<(f64, f64)>, usize), String> {
         if raw_sequence.is_empty() {
             return Err("Passed an empty sequence to supervisor".to_string());
         }
@@ -127,12 +127,25 @@ impl Sampler {
             .collect::<Vec<_>>();
 
         let stacked_tensor = Tensor::stack(&tensor_vector, 0);
+        let lengths_tensor = Tensor::from_slice(
+            &input_lengths
+                .into_iter()
+                .map(|x| x as i64)
+                .collect::<Vec<i64>>(),
+        );
+        let supervisor_input = vec![
+            stacked_tensor.to_kind(Kind::Float),
+            lengths_tensor.to_kind(Kind::Int64),
+        ];
         // Note to me of tomorrow: Right now wrote the code for stacking and padding logic, review to make sure it makes sense.
         // Then pass the thing to supervisor, stack the outputs into one vector and return that.
+        let outputs = SUPERVISOR
+            .as_ref()
+            .expect("The supervisor model to be used")
+            .forward_ts(&supervisor_input);
 
-        // let outputs;
-
-        Ok(vec![vec![1., 1.]])
+        Ok(Vec::<Vec<f64>>::try_from(outputs.expect("Sequence"))
+            .expect("The OK variant of my Converted Supervised Sequence: "))
     }
     fn supervise_sequence(raw_sequence: Vec<DVector<f64>>, look_ahead: usize) -> Vec<DVector<f64>> {
         let (min_max_columns, number_of_assets) = Sampler::find_min_max(&raw_sequence)
@@ -159,8 +172,6 @@ impl Sampler {
                 DVector::from_vec(scaled_row)
             })
             .collect();
-
-        println!("{:?}", min_max_scaled_sequence.len());
 
         // Do Supervisor Pass to Supervise (predict 2 bits ahead until done)
         let supervised_sequence =
@@ -231,8 +242,13 @@ fn evolve_portfolios(
 // Algo Code
 
 fn main() {
-    let mvn = MultivariateNormal::new(vec![0., 0.], vec![1., -0.5, -0.5, 1.])
-        .expect("Wanted a multivariate normal");
+    let mvn = MultivariateNormal::new(
+        vec![0., 0., 0., 0.],
+        vec![
+            1., 0., 0., 0., 0., 1., 0., 0., 0., 0., 1., 0., 0., 0., 0., 1.,
+        ],
+    )
+    .expect("Wanted a multivariate normal");
     let normal_sampler = Sampler::SupervisedNormal {
         normal_distribution: mvn,
         days_to_sample: 30,
