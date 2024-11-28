@@ -1,5 +1,4 @@
 use core::f64;
-use std::f64::MAX_EXP;
 
 use crate::Sampler::{Normal, SupervisedNormal, _SeriesGAN};
 use nalgebra::base::dimension::{Const, Dyn};
@@ -9,15 +8,22 @@ use rand::{prelude::*, Error};
 use statrs::distribution::{Continuous, MultivariateNormal};
 use statrs::statistics::{MeanN, VarianceN};
 use std::sync::LazyLock;
-use tch::{CModule, TchError};
+use tch::{nn, CModule, Kind, TchError, Tensor};
 
 static SUPERVISOR: LazyLock<Result<CModule, TchError>> =
     LazyLock::new(|| CModule::load("/model_weights/supervisor.pt"));
 
 // // Sampler Code
 enum Sampler {
-    Normal(MultivariateNormal, usize),
-    SupervisedNormal(MultivariateNormal, usize, usize), //uses the supervisor to supervise a normal so that hopefully it has the required temporal characteristics
+    Normal {
+        normal_distribution: MultivariateNormal,
+        days_to_sample: usize,
+    },
+    SupervisedNormal {
+        normal_distribution: MultivariateNormal,
+        days_to_sample: usize,
+        look_ahead: usize,
+    }, //uses the supervisor to supervise a normal so that hopefully it has the required temporal characteristics
     _SeriesGAN(usize),
 }
 
@@ -25,38 +31,39 @@ impl Sampler {
     fn sample(&self) -> Vec<DVector<f64>> {
         let mut rng = thread_rng();
         match self {
-            Sampler::Normal(multivariate_normal_distribution, number_of_steps) => {
-                multivariate_normal_distribution
-                    .sample_iter(&mut rng)
-                    .take(*number_of_steps)
-                    .collect::<Vec<_>>()
-            }
-            Sampler::SupervisedNormal(
-                multivariate_normal_distribution,
-                number_of_steps,
+            Sampler::Normal {
+                normal_distribution,
+                days_to_sample,
+            } => normal_distribution
+                .sample_iter(&mut rng)
+                .take(*days_to_sample)
+                .collect::<Vec<_>>(),
+            Sampler::SupervisedNormal {
+                normal_distribution,
+                days_to_sample,
                 look_ahead,
-            ) => {
-                let raw_normal_sequence = multivariate_normal_distribution
+            } => {
+                let raw_normal_sequence = normal_distribution
                     .sample_iter(&mut rng)
-                    .take(*number_of_steps + look_ahead)
+                    .take(*days_to_sample + look_ahead)
                     .collect::<Vec<_>>();
                 Sampler::supervise_sequence(raw_normal_sequence, *look_ahead) //returns supervised_sequence
             }
-            Sampler::_SeriesGAN(number_of_steps) => {
+            Sampler::_SeriesGAN(days_to_sample) => {
                 //
                 let mut rng = thread_rng();
                 let dist = MultivariateNormal::new(vec![0.0, 1.0], vec![1., 0., 0., 1.])
                     .expect("Multivariate normal");
                 dist.sample_iter(&mut rng)
-                    .take(*number_of_steps)
+                    .take(*days_to_sample)
                     .collect::<Vec<_>>()
             }
         }
     }
     // SUPERVISOR FUNCTIONS
-    fn find_min_max(raw_sequence: &Vec<DVector<f64>>) -> Result<Vec<(f64, f64)>, &str> {
+    fn find_min_max(raw_sequence: &Vec<DVector<f64>>) -> Result<(Vec<(f64, f64)>, usize), String> {
         if raw_sequence.is_empty() {
-            return Err("Passed an empty sequence to supervisor");
+            return Err("Passed an empty sequence to supervisor".to_string());
         }
         let dimension = raw_sequence[0].len(); // access first row and then check the number of elements
                                                // must be in this order so that any value is less than INFINITY, and any value is bigger than NEG_INFINITY
@@ -69,16 +76,66 @@ impl Sampler {
                 *max = (*max).max(value);
             }
         }
-        Ok(min_max)
+        Ok((min_max, dimension))
     }
     fn supervisor_pass(
         preprocessed_sequence: Vec<DVector<f64>>,
         look_ahead: usize,
-    ) -> Vec<Vec<f64>> {
-        vec![vec![1., 1., 1.]]
+        number_of_assets: usize,
+    ) -> Result<Vec<Vec<f64>>, String> {
+        if preprocessed_sequence.len() < look_ahead {
+            return Err(
+                "A sequence less than LOOK_BACK was passed to the supervisor pass.".to_string(),
+            );
+        }
+        // Prepare Slices for Training (reversed to match GRUs expectation)
+        let (inputs, input_lengths): (Vec<&[DVector<f64>]>, Vec<usize>) = (1
+            ..(preprocessed_sequence.len() + 1 - look_ahead))
+            .map(|i| (&preprocessed_sequence[..i], i))
+            .rev()
+            .unzip();
+
+        let extract_from_vec_storage =
+            |vec_storage: nalgebra::DVector<f64>| vec_storage.data.as_vec().clone();
+
+        let vectorized_inputs = inputs
+            .iter()
+            .map(|input_sequence| {
+                input_sequence
+                    .iter()
+                    .map(|stuff_inside| extract_from_vec_storage(stuff_inside.clone()))
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+
+        let max_length = input_lengths[0];
+
+        let tensor_vector = vectorized_inputs
+            .iter()
+            .zip(input_lengths.iter())
+            .map(|(input_sequence, &length)| {
+                Tensor::from_slice(
+                    &input_sequence
+                        .iter()
+                        .flatten()
+                        .copied()
+                        .collect::<Vec<f64>>(),
+                )
+                .reshape([length as i64, number_of_assets as i64])
+                .pad([0, 0, 0, (max_length - length) as i64], "constant", 0.0)
+            })
+            .collect::<Vec<_>>();
+
+        let stacked_tensor = Tensor::stack(&tensor_vector, 0);
+        // Note to me of tomorrow: Right now wrote the code for stacking and padding logic, review to make sure it makes sense.
+        // Then pass the thing to supervisor, stack the outputs into one vector and return that.
+
+        // let outputs;
+
+        Ok(vec![vec![1., 1.]])
     }
     fn supervise_sequence(raw_sequence: Vec<DVector<f64>>, look_ahead: usize) -> Vec<DVector<f64>> {
-        let min_max_columns = Sampler::find_min_max(&raw_sequence)
+        let (min_max_columns, number_of_assets) = Sampler::find_min_max(&raw_sequence)
             .expect("A list of tuples containing the Min-Max of each column");
 
         // // Define helper functions
@@ -87,7 +144,7 @@ impl Sampler {
             |scaled_value: f64, min: f64, max: f64| scaled_value * (max - min) + min;
 
         // Scaling is necessary since supervisor was trained on scaled sequences
-        let min_max_scaled_sequence = raw_sequence
+        let min_max_scaled_sequence: Vec<_> = raw_sequence
             .iter()
             .map(|row| {
                 // min-max scale all the entries
@@ -103,8 +160,12 @@ impl Sampler {
             })
             .collect();
 
+        println!("{:?}", min_max_scaled_sequence.len());
+
         // Do Supervisor Pass to Supervise (predict 2 bits ahead until done)
-        let supervised_sequence = Sampler::supervisor_pass(min_max_scaled_sequence, look_ahead);
+        let supervised_sequence =
+            Sampler::supervisor_pass(min_max_scaled_sequence, look_ahead, number_of_assets)
+                .expect("The supervised sequence.");
 
         // Undo Scaling
         let supervised_restored_sequence = supervised_sequence
@@ -172,8 +233,12 @@ fn evolve_portfolios(
 fn main() {
     let mvn = MultivariateNormal::new(vec![0., 0.], vec![1., -0.5, -0.5, 1.])
         .expect("Wanted a multivariate normal");
-    let normal_sampler = Sampler::Normal(mvn, 30);
-    evolve_portfolios(1, 10, 100, 4, normal_sampler);
+    let normal_sampler = Sampler::SupervisedNormal {
+        normal_distribution: mvn,
+        days_to_sample: 30,
+        look_ahead: 2,
+    };
+    evolve_portfolios(1, 1, 100, 4, normal_sampler);
 
     let test = |x: f64| {
         println!("{}", x);
