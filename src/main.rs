@@ -12,6 +12,7 @@ use tch::{nn, CModule, Kind, TchError, Tensor};
 
 static SUPERVISOR: LazyLock<Result<CModule, TchError>> =
     LazyLock::new(|| CModule::load("../model_weights/supervisor.pt"));
+static SUPERVISOR_INPUT_DIM = 4;//Trained at that dimension so I can't take more or less than that.
 
 // // Sampler Code
 enum Sampler {
@@ -249,6 +250,7 @@ fn main() {
         ],
     )
     .expect("Wanted a multivariate normal");
+    let mvn_dimension = mvn.mean().expect("VecStorage of means").len());
     let normal_sampler = Sampler::SupervisedNormal {
         normal_distribution: mvn,
         days_to_sample: 30,
