@@ -219,6 +219,8 @@ fn evolve_portfolios(
     // Initialization Phase
     let rng = thread_rng();
     let uniform = Uniform::new(0., 1.);
+
+    // For each portfolio we sample from a Uniform and then normalize
     let population: Vec<Vec<f64>> = (0..population_size)
         .map(|_| {
             let mut portfolio = rng
@@ -232,6 +234,8 @@ fn evolve_portfolios(
         })
         .collect::<Vec<_>>();
 
+    // We'd want to compute for each day
+    let generation_data = Vec::new();
     for generation in 0..generations {
         // Sample the data for this generation
         let sample_days = sampler.sample();
