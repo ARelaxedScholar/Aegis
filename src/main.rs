@@ -17,22 +17,34 @@ static SUPERVISOR: LazyLock<Result<CModule, TchError>> =
     LazyLock::new(|| CModule::load("../model_weights/supervisor.pt"));
 //static SUPERVISOR_INPUT_DIM = 4;//Trained at that dimension so I can't take more or less than that.
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialOrd)]
 struct Portfolio {
     id: usize,
+    rank: Option<usize>,
+    crowding_distance: Option<f64>,
     weights: Vec<f64>,
     average_returns: f64,
     volatility: f64,
     sharpe_ratio: f64,
 }
 
+impl PartialEq for Portfolio {
+    fn eq(&self, other: &Self) -> bool {
+        self.id == other.id
+    }
+}
+impl Eq for Portfolio {}
 static PORTFOLIO_ID_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
 impl Portfolio {
     fn new(weights: Vec<f64>, average_returns: f64, volatility: f64, sharpe_ratio: f64) -> Self {
         let id = PORTFOLIO_ID_COUNTER.fetch_add(1, Ordering::SeqCst);
+        let rank = None;
+        let crowding_distance = None;
         Portfolio {
             id,
+            rank,
+            crowding_distance,
             weights,
             average_returns,
             volatility,
@@ -269,8 +281,9 @@ impl Sampler {
         supervised_restored_sequence
     }
 }
+
 fn find_pareto_front(portfolios: &[Portfolio]) -> Vec<Portfolio> {
-    // Find all the dominated portfolios withing batch
+    // Find all the dominated portfolios within batch
     portfolios
         .par_iter()
         .enumerate()
@@ -283,6 +296,38 @@ fn find_pareto_front(portfolios: &[Portfolio]) -> Vec<Portfolio> {
         })
         .map(|(_, portfolio)| portfolio.clone())
         .collect()
+}
+
+fn calculate_crowding_distance(pareto_front: Vec<Portfolio>) {}
+
+fn non_dominated_sort(portfolios: &mut [Portfolio]) -> Vec<Vec<Portfolio>> {
+    let mut fronts: Vec<Vec<Portfolio>> = Vec::new();
+    let mut remaining_portfolios = portfolios.to_vec();
+
+    let mut current_front = 1;
+    while !remaining_portfolios.is_empty() {
+        // Find the Pareto front & Update Portfolio
+        let mut pareto_front = find_pareto_front(&mut remaining_portfolios);
+        pareto_front.iter_mut().for_each(|portfolio| {
+            portfolio.rank = Some(current_front);
+        });
+
+        // Modifies the crowding distances in-place
+        calculate_crowding_distance(pareto_front.clone());
+
+        // Then add it to the fronts list
+        fronts.push(pareto_front.clone());
+
+        // Remove the portfolios in the current front
+        let pareto_ids: std::collections::HashSet<_> =
+            pareto_front.iter().map(|portfolio| portfolio.id).collect();
+
+        // Remaining Portfolios
+        remaining_portfolios.retain(|portfolio| !pareto_ids.contains(&portfolio.id));
+        current_front += 1;
+    }
+
+    fronts
 }
 
 // Algo Logic
@@ -377,16 +422,14 @@ fn evolve_portfolios(
         )
         .collect();
 
-        let portfolio_structs: Vec<Portfolio> = portfolio_simulation_averages
+        let mut portfolio_structs: Vec<Portfolio> = portfolio_simulation_averages
             .par_iter()
             .map(|(portfolio, ave_ret, ave_vol, ave_sharpe)| {
                 Portfolio::new(portfolio.to_vec(), *ave_ret, *ave_vol, *ave_sharpe)
             })
             .collect();
 
-        let non_dominated_portfolios = find_pareto_front(&portfolio_structs);
-
-        println!("{}", non_dominated_portfolios.len());
+        let fronts = non_dominated_sort(&mut portfolio_structs);
     }
 }
 
@@ -426,8 +469,8 @@ fn compute_portfolio_performance(
         sharpe_ratio,
     )
 }
-// Algo Code
 
+// Algo Code
 fn main() {
     let mvn = MultivariateNormal::new(
         vec![0., 0., 0., 0.],
