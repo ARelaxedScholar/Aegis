@@ -1,20 +1,74 @@
 use core::f64;
+use rayon::prelude::*;
 
 use crate::Sampler::{Normal, SupervisedNormal, _SeriesGAN};
+use itertools::izip;
 use nalgebra::base::dimension::{Const, Dyn};
 use nalgebra::{DMatrix, DVector, Matrix, VecStorage};
 use rand::distributions::Uniform;
 use rand::{prelude::*, Error};
 use statrs::distribution::{Continuous, MultivariateNormal};
 use statrs::statistics::{MeanN, VarianceN};
-use std::sync::LazyLock;
+use std::sync::atomic::AtomicUsize;
+use std::sync::{atomic::Ordering, LazyLock};
 use tch::{nn, CModule, Kind, TchError, Tensor};
 
 static SUPERVISOR: LazyLock<Result<CModule, TchError>> =
     LazyLock::new(|| CModule::load("../model_weights/supervisor.pt"));
-static SUPERVISOR_INPUT_DIM = 4;//Trained at that dimension so I can't take more or less than that.
+//static SUPERVISOR_INPUT_DIM = 4;//Trained at that dimension so I can't take more or less than that.
 
-// // Sampler Code
+#[derive(Debug, Clone)]
+struct Portfolio {
+    id: usize,
+    weights: Vec<f64>,
+    average_returns: f64,
+    volatility: f64,
+    sharpe_ratio: f64,
+}
+
+static PORTFOLIO_ID_COUNTER: AtomicUsize = AtomicUsize::new(0);
+
+impl Portfolio {
+    fn new(weights: Vec<f64>, average_returns: f64, volatility: f64, sharpe_ratio: f64) -> Self {
+        let id = PORTFOLIO_ID_COUNTER.fetch_add(1, Ordering::SeqCst);
+        Portfolio {
+            id,
+            weights,
+            average_returns,
+            volatility,
+            sharpe_ratio,
+        }
+    }
+
+    fn to_metrics_vector(&self) -> Vec<f64> {
+        // We negate the self.volatility to make maximization the global goal
+        vec![self.average_returns, -self.volatility, self.sharpe_ratio]
+    }
+
+    fn is_dominated_by(&self, other: &Portfolio) -> bool {
+        let self_metrics = self.to_metrics_vector();
+        let other_metrics = other.to_metrics_vector();
+        // Dominating implies being better in one area, while not being worse in any other compared
+        // to other. Logically, if we are better than other in at least one we can't be dominated.
+        let better_in_at_least_one = self_metrics
+            .iter()
+            .zip(other_metrics.iter())
+            .any(|(&self_metric, &other_metric)| self_metric > other_metric);
+
+        // We check that other_metric is dominating (better than) in at least one category, if that is the case, self cannot
+        // be in the Pareto front and is therefore dominated
+        let dominated = self_metrics
+            .iter()
+            .zip(other_metrics.iter())
+            .any(|(&self_metric, &other_metric)| self_metric < other_metric);
+
+        // If better_in_at_least_one is true, we complement it since we want to return whether we're dominated
+        // If we know we are worse in one metric, we know we are dominated
+        // Both must be true for self to be part of the Pareto Front
+        !better_in_at_least_one && dominated
+    }
+}
+// Sampler Code
 enum Sampler {
     Normal {
         normal_distribution: MultivariateNormal,
@@ -29,7 +83,7 @@ enum Sampler {
 }
 
 impl Sampler {
-    fn sample(&self) -> Vec<DVector<f64>> {
+    fn sample_price_scenario(&self) -> Vec<DVector<f64>> {
         let mut rng = thread_rng();
         match self {
             Sampler::Normal {
@@ -60,6 +114,24 @@ impl Sampler {
                     .collect::<Vec<_>>()
             }
         }
+    }
+    fn sample_returns(&self) -> Vec<Vec<f64>> {
+        let scenario = self.sample_price_scenario();
+
+        // Compute Returns
+        (0..scenario.len() - 1)
+            .into_par_iter()
+            .map(|t| {
+                let current_row = &scenario[t];
+                let next_row = &scenario[t + 1];
+
+                current_row
+                    .iter()
+                    .zip(next_row.iter())
+                    .map(|(current, next)| (next - current) / current)
+                    .collect::<Vec<f64>>()
+            })
+            .collect::<Vec<Vec<f64>>>()
     }
     // SUPERVISOR FUNCTIONS
     fn find_min_max(raw_sequence: &[DVector<f64>]) -> Result<(Vec<(f64, f64)>, usize), String> {
@@ -197,6 +269,21 @@ impl Sampler {
         supervised_restored_sequence
     }
 }
+fn find_pareto_front(portfolios: &[Portfolio]) -> Vec<Portfolio> {
+    // Find all the dominated portfolios withing batch
+    portfolios
+        .par_iter()
+        .enumerate()
+        .filter(|(i, portfolio_a)| {
+            // A portfolio is non-dominated iff no other portfolio dominates it
+            !portfolios
+                .iter()
+                .enumerate()
+                .any(|(j, portfolio_b)| *i != j && portfolio_a.is_dominated_by(portfolio_b))
+        })
+        .map(|(_, portfolio)| portfolio.clone())
+        .collect()
+}
 
 // Algo Logic
 // 1. Generate a bunch of portfolio for the first batch based on a parameter passed (initial training size)
@@ -213,7 +300,10 @@ fn evolve_portfolios(
     time_horizon: usize,
     generations: usize,
     population_size: usize,
+    simulations_per_generation: usize,
     assets_under_management: usize,
+    money_to_invest: f64,
+    risk_free_rate: f64,
     sampler: Sampler,
 ) {
     // Initialization Phase
@@ -221,7 +311,7 @@ fn evolve_portfolios(
     let uniform = Uniform::new(0., 1.);
 
     // For each portfolio we sample from a Uniform and then normalize
-    let population: Vec<Vec<f64>> = (0..population_size)
+    let mut population: Vec<Vec<f64>> = (0..population_size)
         .map(|_| {
             let mut portfolio = rng
                 .clone()
@@ -230,19 +320,111 @@ fn evolve_portfolios(
                 .collect::<Vec<f64>>();
             let magnitude = portfolio.iter().sum::<f64>();
 
-            portfolio.iter_mut().map(|x| *x / magnitude).collect()
+            portfolio.iter().map(|x| x / magnitude).collect()
         })
         .collect::<Vec<_>>();
 
     // We'd want to compute for each day
-    let generation_data = Vec::new();
     for generation in 0..generations {
-        // Sample the data for this generation
-        let sample_days = sampler.sample();
+        // Reset Arrays for Generation
+        let mut simulation_average_returns: Vec<f64> = vec![0.; population_size];
+        let mut simulation_average_volatilities: Vec<f64> = vec![0.; population_size];
+        let mut simulation_average_sharpe_ratios: Vec<f64> = vec![0.; population_size];
 
-        // Compute the metrics for each element in the portfolio
-        // based on this data.
+        // Run the simulations and collect the results
+        for _ in 0..simulations_per_generation {
+            // Sample the data for this simulation
+            let scenario_returns = sampler.sample_returns();
+            let portfolios_performance_metrics = population
+                .par_iter()
+                .map(|portfolio| {
+                    compute_portfolio_performance(
+                        scenario_returns.clone(),
+                        portfolio.clone(),
+                        money_to_invest,
+                        risk_free_rate,
+                    )
+                })
+                .collect::<Vec<(Vec<f64>, f64, f64, f64)>>();
+
+            // Run the Cumulative sum of all the metrics over the number of simulations
+            portfolios_performance_metrics.iter().enumerate().for_each(
+                |(i, &(_, average_return, volatility, sharpe_ratio))| {
+                    simulation_average_returns[i] += average_return;
+                    simulation_average_volatilities[i] += volatility;
+                    simulation_average_sharpe_ratios[i] += sharpe_ratio;
+                },
+            );
+        }
+
+        // Divide everything by simulation number to get the average
+        simulation_average_returns
+            .par_iter_mut()
+            .for_each(|ret| *ret /= simulations_per_generation as f64);
+        simulation_average_volatilities
+            .par_iter_mut()
+            .for_each(|volatility| *volatility /= simulations_per_generation as f64);
+        simulation_average_sharpe_ratios
+            .par_iter_mut()
+            .for_each(|sharpe_ratio| *sharpe_ratio /= simulations_per_generation as f64);
+
+        // Initialize the Structs and then find Pareto Front
+        let portfolio_simulation_averages: Vec<(Vec<f64>, f64, f64, f64)> = izip!(
+            population.clone(),
+            simulation_average_returns,
+            simulation_average_volatilities,
+            simulation_average_sharpe_ratios
+        )
+        .collect();
+
+        let portfolio_structs: Vec<Portfolio> = portfolio_simulation_averages
+            .par_iter()
+            .map(|(portfolio, ave_ret, ave_vol, ave_sharpe)| {
+                Portfolio::new(portfolio.to_vec(), *ave_ret, *ave_vol, *ave_sharpe)
+            })
+            .collect();
+
+        let non_dominated_portfolios = find_pareto_front(&portfolio_structs);
+
+        println!("{}", non_dominated_portfolios.len());
     }
+}
+
+fn compute_portfolio_performance(
+    returns: Vec<Vec<f64>>,
+    weights: Vec<f64>,
+    money_to_invest: f64,
+    risk_free_rate: f64,
+) -> (Vec<f64>, f64, f64, f64) {
+    // Returns per row
+    let portfolio_returns = returns
+        .par_iter()
+        .map(|row| {
+            row.into_par_iter()
+                .zip(weights.par_iter())
+                .map(|(ret, weight)| ret * money_to_invest * weight)
+                .sum::<f64>()
+        })
+        .collect::<Vec<f64>>();
+
+    // Metrics
+    // Absolute Terms
+    let average_return = portfolio_returns.iter().sum::<f64>() / (portfolio_returns.len() as f64);
+    let volatility = (portfolio_returns
+        .iter()
+        .map(|ret| (ret - average_return).powi(2))
+        .sum::<f64>()
+        / (portfolio_returns.len() as f64 - 1.0))
+        .sqrt();
+    let sharpe_ratio = (average_return - (money_to_invest * risk_free_rate)) / volatility;
+    let percent_volatility = volatility / money_to_invest;
+
+    (
+        portfolio_returns,
+        average_return,
+        percent_volatility,
+        sharpe_ratio,
+    )
 }
 // Algo Code
 
@@ -254,13 +436,14 @@ fn main() {
         ],
     )
     .expect("Wanted a multivariate normal");
-    let mvn_dimension = mvn.mean().expect("VecStorage of means").len());
+    let mvn_dimension = mvn.mean().expect("VecStorage of means").len();
     let normal_sampler = Sampler::SupervisedNormal {
         normal_distribution: mvn,
         days_to_sample: 30,
         look_ahead: 2,
     };
-    evolve_portfolios(1, 1, 100, 4, normal_sampler);
+
+    evolve_portfolios(1, 1, 1000, 1, 4, 100_000_000., 0.02, normal_sampler);
 
     let test = |x: f64| {
         println!("{}", x);

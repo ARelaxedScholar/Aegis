@@ -9,4 +9,6 @@ ndarray = "0.16.1"
 statrs = "0.17.1"
 rand = "0.8.5"
 tch = "0.18.0"
+rayon = "1.10.0"
+itertools = "0.13.0"
 
