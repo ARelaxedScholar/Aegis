@@ -399,6 +399,29 @@ fn non_dominated_sort(portfolios: &mut [Portfolio]) -> Vec<Vec<Portfolio>> {
 
     fronts
 }
+struct EvolutionConfig {
+    time_horizon: usize,
+    generations: usize,
+    population_size: usize,
+    simulations_per_generation: usize,
+    assets_under_management: usize,
+    money_to_invest: f64,
+    risk_free_rate: f64,
+    elitism_rate: f64,
+    mutation_rate: f64,
+    sampler: Sampler,
+    generation_check_interval: usize,
+}
+
+struct EvolutionResult {
+    pareto_fronts: Vec<Vec<Portfolio>>,
+    best_average_return_per_generation: Vec<f64>,
+    average_return_per_generation: Vec<f64>,
+    best_average_volatility_per_generation: Vec<f64>,
+    average_volatility_per_generation: Vec<f64>,
+    best_average_sharpe_ratio_per_generation: Vec<f64>,
+    average_sharpe_ratio_per_generation: Vec<f64>,
+}
 
 // Algo Logic
 // 1. Generate a bunch of portfolio for the first batch based on a parameter passed (initial training size)
@@ -411,32 +434,26 @@ fn non_dominated_sort(portfolios: &mut [Portfolio]) -> Vec<Vec<Portfolio>> {
 // 5. Repeat until golden brown. lel
 //
 // This will be made into a python endpoint to write the code in Python simpler.
-fn evolve_portfolios(
-    time_horizon: usize,
-    generations: usize,
-    population_size: usize,
-    simulations_per_generation: usize,
-    assets_under_management: usize,
-    money_to_invest: f64,
-    risk_free_rate: f64,
-    elitism_rate: f64,
-    mutation_rate: f64,
-    sampler: Sampler,
-    generation_check_interval: usize,
-) {
+fn evolve_portfolios(config: EvolutionConfig) -> EvolutionResult {
     // Initialization Phase
+    //
+    // Common Enough to Alias
+    let population_size = config.population_size;
+    let generations = config.generations;
+    let simulations_per_generation = config.simulations_per_generation;
+
     let rng = thread_rng();
     let uniform = Uniform::new(0., 1.);
-    let elite_population_size = ((population_size as f64) * elitism_rate) as usize;
+    let elite_population_size = ((population_size as f64) * config.elitism_rate) as usize;
     let offspring_count = population_size - elite_population_size;
 
     // For each portfolio we sample from a Uniform and then normalize
-    let mut population: Vec<Vec<f64>> = (0..population_size)
+    let mut population: Vec<Vec<f64>> = (0..config.population_size)
         .map(|_| {
             let mut portfolio = rng
                 .clone()
                 .sample_iter(uniform)
-                .take(assets_under_management)
+                .take(config.assets_under_management)
                 .collect::<Vec<f64>>();
             let magnitude = portfolio.iter().sum::<f64>();
 
@@ -445,35 +462,56 @@ fn evolve_portfolios(
         })
         .collect::<Vec<_>>();
 
+    // Put here so that we can pass it to the final step
+    let mut simulation_average_returns: Vec<f64> = vec![0.; population_size];
+    let mut simulation_average_volatilities: Vec<f64> = vec![0.; population_size];
+    let mut simulation_average_sharpe_ratios: Vec<f64> = vec![0.; population_size];
     // Metrics Vectors
-    let mut best_average_return_per_generation: Vec<f64> = Vec::with_capacity(generations);
-    let mut average_return_per_generation: Vec<f64> = Vec::with_capacity(generations);
+    let mut best_average_return_per_generation: Vec<f64> = vec![0.; population_size];
+    let mut average_return_per_generation: Vec<f64> = vec![0.; population_size];
 
-    let mut best_average_volatility_per_generation: Vec<f64> = Vec::with_capacity(generations);
-    let mut average_volatility_per_generation: Vec<f64> = Vec::with_capacity(generations);
+    let mut best_average_volatility_per_generation: Vec<f64> = vec![0.; population_size];
+    let mut average_volatility_per_generation: Vec<f64> = vec![0.; population_size];
 
-    let mut best_average_sharpe_ratio_per_generation: Vec<f64> = Vec::with_capacity(generations);
-    let mut average_sharpe_ratio_per_generation: Vec<f64> = Vec::with_capacity(generations);
+    let mut best_average_sharpe_ratio_per_generation: Vec<f64> = vec![0.; population_size];
+    let mut average_sharpe_ratio_per_generation: Vec<f64> = vec![0.; population_size];
+
+    let turn_weights_into_portfolios =
+        |population: Vec<Vec<f64>>,
+         simulation_average_returns: Vec<f64>,
+         simulation_average_volatilities: Vec<f64>,
+         simulation_average_sharpe_ratios: Vec<f64>| {
+            let portfolio_simulation_averages: Vec<(Vec<f64>, f64, f64, f64)> = izip!(
+                population,
+                simulation_average_returns,
+                simulation_average_volatilities,
+                simulation_average_sharpe_ratios
+            )
+            .collect();
+            portfolio_simulation_averages
+                .par_iter()
+                .map(|(portfolio, ave_ret, ave_vol, ave_sharpe)| {
+                    Portfolio::new(portfolio.to_vec(), *ave_ret, *ave_vol, *ave_sharpe)
+                })
+                .collect()
+        };
 
     // EVOLUTION BABY!!!
     for generation in 0..generations {
         // Reset Arrays for Generation
-        let mut simulation_average_returns: Vec<f64> = vec![0.; population_size];
-        let mut simulation_average_volatilities: Vec<f64> = vec![0.; population_size];
-        let mut simulation_average_sharpe_ratios: Vec<f64> = vec![0.; population_size];
 
         // Run the simulations and collect the results
         for _ in 0..simulations_per_generation {
             // Sample the data for this simulation
-            let scenario_returns = sampler.sample_returns();
+            let scenario_returns = config.sampler.sample_returns();
             let portfolios_performance_metrics = population
                 .par_iter()
                 .map(|portfolio| {
                     compute_portfolio_performance(
                         scenario_returns.clone(),
                         portfolio.clone(),
-                        money_to_invest,
-                        risk_free_rate,
+                        config.money_to_invest,
+                        config.risk_free_rate,
                     )
                 })
                 .collect::<Vec<(Vec<f64>, f64, f64, f64)>>();
@@ -519,7 +557,7 @@ fn evolve_portfolios(
         average_sharpe_ratio_per_generation[generation] =
             simulation_average_sharpe_ratios.iter().sum::<f64>() / (population_size as f64);
 
-        if (generation % generation_check_interval == 0) || (generation == generations - 1) {
+        if (generation % config.generation_check_interval == 0) || (generation == generations - 1) {
             println!(
     "Generation {}: Best Return: {:.4}, Avg Return: {:.4}, Best Sharpe: {:.4}, Avg Sharpe: {:.4}, Best Volatility: {:.4}, Avg Volatility: {:.4}",
     generation+1,
@@ -533,20 +571,13 @@ fn evolve_portfolios(
         }
         // NEXT GENERATION CREATION LOGIC
         // Initialize the Structs and then find Pareto Front
-        let portfolio_simulation_averages: Vec<(Vec<f64>, f64, f64, f64)> = izip!(
-            population.clone(),
-            simulation_average_returns,
-            simulation_average_volatilities,
-            simulation_average_sharpe_ratios
-        )
-        .collect();
 
-        let mut portfolio_structs: Vec<Portfolio> = portfolio_simulation_averages
-            .par_iter()
-            .map(|(portfolio, ave_ret, ave_vol, ave_sharpe)| {
-                Portfolio::new(portfolio.to_vec(), *ave_ret, *ave_vol, *ave_sharpe)
-            })
-            .collect();
+        let mut portfolio_structs: Vec<Portfolio> = turn_weights_into_portfolios(
+            population.clone(),
+            simulation_average_returns.clone(),
+            simulation_average_volatilities.clone(),
+            simulation_average_sharpe_ratios.clone(),
+        );
 
         let mut fronts = non_dominated_sort(&mut portfolio_structs);
 
@@ -574,8 +605,24 @@ fn evolve_portfolios(
             }
         }
 
-        let offsprings = generate_offsprings(&population, offspring_count, mutation_rate);
+        let offsprings = generate_offsprings(&population, offspring_count, config.mutation_rate);
         population.extend(offsprings);
+    }
+
+    //
+    EvolutionResult {
+        pareto_fronts: non_dominated_sort(&mut turn_weights_into_portfolios(
+            population,
+            simulation_average_returns,
+            simulation_average_volatilities,
+            simulation_average_sharpe_ratios,
+        )), // Includes both best and their offsprings
+        best_average_return_per_generation,
+        average_return_per_generation,
+        best_average_volatility_per_generation,
+        average_volatility_per_generation,
+        best_average_sharpe_ratio_per_generation,
+        average_sharpe_ratio_per_generation,
     }
 }
 
@@ -689,19 +736,19 @@ fn main() {
         look_ahead: 2,
     };
 
-    evolve_portfolios(
-        1,
-        100,
-        100,
-        1000,
-        4,
-        100_000_000.,
-        0.02,
-        0.5,
-        0.1,
-        normal_sampler,
-        10,
-    );
+    evolve_portfolios(EvolutionConfig {
+        time_horizon: 1,
+        generations: 100,
+        population_size: 100,
+        simulations_per_generation: 10_000,
+        assets_under_management: 4,
+        money_to_invest: 1_000_000_000.,
+        risk_free_rate: 0.02,
+        elitism_rate: 0.5,
+        mutation_rate: 0.1,
+        sampler: normal_sampler,
+        generation_check_interval: 10,
+    });
 
     let test = |x: f64| {
         println!("{}", x);
