@@ -1,24 +1,22 @@
 use core::f64;
-use rand::seq::index::IndexVecIntoIter;
 use rayon::prelude::*;
 
-use crate::Sampler::{Normal, SupervisedNormal, _SeriesGAN};
-use itertools::{izip, Itertools};
-use nalgebra::base::dimension::{Const, Dyn};
-use nalgebra::{DMatrix, DVector, Matrix, VecStorage};
+use itertools::izip;
+use nalgebra::DVector;
 use rand::distributions::Uniform;
-use rand::{prelude::*, Error};
-use statrs::distribution::{Continuous, MultivariateNormal};
-use statrs::statistics::{MeanN, VarianceN};
+use rand::prelude::*;
+use statrs::distribution::MultivariateNormal;
+use statrs::statistics::MeanN;
 use std::sync::atomic::AtomicUsize;
 use std::sync::{atomic::Ordering, LazyLock};
-use tch::{nn, CModule, Kind, TchError, Tensor};
+use tch::{CModule, Kind, TchError, Tensor};
 
 static SUPERVISOR: LazyLock<Result<CModule, TchError>> =
     LazyLock::new(|| CModule::load("../model_weights/supervisor.pt"));
 //static SUPERVISOR_INPUT_DIM = 4;//Trained at that dimension so I can't take more or less than that.
 const NUMBER_OF_OPTIMIZATION_OBJECTIVES: usize = 3;
 const PERTURBATION: f64 = 0.01;
+
 #[derive(Debug, Clone)]
 struct Portfolio {
     id: usize,
@@ -104,7 +102,7 @@ impl Portfolio {
 }
 // Sampler Code
 enum Sampler {
-    Normal {
+    _Normal {
         normal_distribution: MultivariateNormal,
         days_to_sample: usize,
     },
@@ -120,7 +118,7 @@ impl Sampler {
     fn sample_price_scenario(&self) -> Vec<DVector<f64>> {
         let mut rng = thread_rng();
         match self {
-            Sampler::Normal {
+            Sampler::_Normal {
                 normal_distribution,
                 days_to_sample,
             } => normal_distribution
@@ -400,7 +398,7 @@ fn non_dominated_sort(portfolios: &mut [Portfolio]) -> Vec<Vec<Portfolio>> {
     fronts
 }
 struct EvolutionConfig {
-    time_horizon: usize,
+    time_horizon_in_days: usize,
     generations: usize,
     population_size: usize,
     simulations_per_generation: usize,
@@ -467,14 +465,14 @@ fn evolve_portfolios(config: EvolutionConfig) -> EvolutionResult {
     let mut simulation_average_volatilities: Vec<f64> = vec![0.; population_size];
     let mut simulation_average_sharpe_ratios: Vec<f64> = vec![0.; population_size];
     // Metrics Vectors
-    let mut best_average_return_per_generation: Vec<f64> = vec![0.; population_size];
-    let mut average_return_per_generation: Vec<f64> = vec![0.; population_size];
+    let mut best_average_return_per_generation: Vec<f64> = vec![0.; generations];
+    let mut average_return_per_generation: Vec<f64> = vec![0.; generations];
 
-    let mut best_average_volatility_per_generation: Vec<f64> = vec![0.; population_size];
-    let mut average_volatility_per_generation: Vec<f64> = vec![0.; population_size];
+    let mut best_average_volatility_per_generation: Vec<f64> = vec![0.; generations];
+    let mut average_volatility_per_generation: Vec<f64> = vec![0.; generations];
 
-    let mut best_average_sharpe_ratio_per_generation: Vec<f64> = vec![0.; population_size];
-    let mut average_sharpe_ratio_per_generation: Vec<f64> = vec![0.; population_size];
+    let mut best_average_sharpe_ratio_per_generation: Vec<f64> = vec![0.; generations];
+    let mut average_sharpe_ratio_per_generation: Vec<f64> = vec![0.; generations];
 
     let turn_weights_into_portfolios =
         |population: Vec<Vec<f64>>,
@@ -499,6 +497,9 @@ fn evolve_portfolios(config: EvolutionConfig) -> EvolutionResult {
     // EVOLUTION BABY!!!
     for generation in 0..generations {
         // Reset Arrays for Generation
+        simulation_average_returns.fill(0.0);
+        simulation_average_volatilities.fill(0.0);
+        simulation_average_sharpe_ratios.fill(0.0);
 
         // Run the simulations and collect the results
         for _ in 0..simulations_per_generation {
@@ -512,6 +513,7 @@ fn evolve_portfolios(config: EvolutionConfig) -> EvolutionResult {
                         portfolio.clone(),
                         config.money_to_invest,
                         config.risk_free_rate,
+                        config.time_horizon_in_days as f64,
                     )
                 })
                 .collect::<Vec<(Vec<f64>, f64, f64, f64)>>();
@@ -678,6 +680,13 @@ fn mutate(weights: &mut Vec<f64>, mutation_rate: f64) {
         }
     }
 
+    // Ensure non-negative weights
+    for weight in weights.iter_mut() {
+        if *weight < 0.0 {
+            *weight = 0.0;
+        }
+    }
+
     // Normalize again
     let total: f64 = weights.iter().sum();
     weights.iter_mut().for_each(|w| *w /= total);
@@ -688,6 +697,7 @@ fn compute_portfolio_performance(
     weights: Vec<f64>,
     money_to_invest: f64,
     risk_free_rate: f64,
+    time_horizon_in_days: f64, // these are days
 ) -> (Vec<f64>, f64, f64, f64) {
     // Returns per row
     let portfolio_returns = returns
@@ -700,8 +710,6 @@ fn compute_portfolio_performance(
         })
         .collect::<Vec<f64>>();
 
-    // Metrics
-    // Absolute Terms
     let average_return = portfolio_returns.iter().sum::<f64>() / (portfolio_returns.len() as f64);
     let volatility = (portfolio_returns
         .iter()
@@ -709,13 +717,35 @@ fn compute_portfolio_performance(
         .sum::<f64>()
         / (portfolio_returns.len() as f64 - 1.0))
         .sqrt();
-    let sharpe_ratio = (average_return - (money_to_invest * risk_free_rate)) / volatility;
-    let percent_volatility = volatility / money_to_invest;
 
+    // Annualizing!
+    let number_of_periods = portfolio_returns.len() as f64;
+    let time_horizon_in_years = time_horizon_in_days / 365.0;
+    let periods_per_year = number_of_periods / time_horizon_in_years;
+
+    let annualized_return = average_return * periods_per_year;
+    let annualized_volatility = volatility * periods_per_year.sqrt();
+    let percent_annualized_volatility = annualized_volatility / money_to_invest;
+
+    // Adjust risk-free rate to the provided time horizon
+    let risk_free_return = money_to_invest * risk_free_rate * time_horizon_in_years;
+
+    let sharpe_ratio = if volatility != 0.0 {
+        (average_return - risk_free_return) / volatility
+    } else if average_return > risk_free_return {
+        // Portfolio offers a guaranteed return above the risk-free rate
+        f64::MAX // Or a large constant like 1e6
+    } else if average_return < risk_free_return {
+        // Portfolio offers a guaranteed return below the risk-free rate
+        f64::MIN // Or a large negative constant like -1e6
+    } else {
+        // Portfolio return equals the risk-free rate
+        0.0
+    };
     (
         portfolio_returns,
-        average_return,
-        percent_volatility,
+        annualized_return,
+        percent_annualized_volatility,
         sharpe_ratio,
     )
 }
@@ -737,7 +767,7 @@ fn main() {
     };
 
     evolve_portfolios(EvolutionConfig {
-        time_horizon: 1,
+        time_horizon_in_days: 30,
         generations: 100,
         population_size: 100,
         simulations_per_generation: 10_000,
