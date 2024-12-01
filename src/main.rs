@@ -3,7 +3,7 @@ use rand::seq::index::IndexVecIntoIter;
 use rayon::prelude::*;
 
 use crate::Sampler::{Normal, SupervisedNormal, _SeriesGAN};
-use itertools::izip;
+use itertools::{izip, Itertools};
 use nalgebra::base::dimension::{Const, Dyn};
 use nalgebra::{DMatrix, DVector, Matrix, VecStorage};
 use rand::distributions::Uniform;
@@ -18,7 +18,8 @@ static SUPERVISOR: LazyLock<Result<CModule, TchError>> =
     LazyLock::new(|| CModule::load("../model_weights/supervisor.pt"));
 //static SUPERVISOR_INPUT_DIM = 4;//Trained at that dimension so I can't take more or less than that.
 const NUMBER_OF_OPTIMIZATION_OBJECTIVES: usize = 3;
-#[derive(Debug, Clone, PartialOrd)]
+const PERTURBATION: f64 = 0.01;
+#[derive(Debug, Clone)]
 struct Portfolio {
     id: usize,
     rank: Option<usize>,
@@ -32,6 +33,26 @@ struct Portfolio {
 impl PartialEq for Portfolio {
     fn eq(&self, other: &Self) -> bool {
         self.id == other.id
+    }
+}
+impl PartialOrd for Portfolio {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        // if ID is the same return equal
+        if self.id == other.id {
+            return Some(std::cmp::Ordering::Equal);
+        }
+
+        // Compare based on rank
+        if self.rank != other.rank {
+            return self.rank.partial_cmp(&other.rank);
+        }
+        // If Rank is the same compare based on Crowding_Distance
+        match (self.crowding_distance, other.crowding_distance) {
+            (Some(self_distance), Some(other_distance)) => {
+                self_distance.partial_cmp(&other_distance)
+            }
+            _ => panic!("Crowding distance is None for one or both portfolios."), //shouldn't happen after processing
+        }
     }
 }
 impl Eq for Portfolio {}
@@ -299,7 +320,7 @@ fn find_pareto_front(portfolios: &[Portfolio]) -> Vec<Portfolio> {
         .collect()
 }
 
-fn calculate_and_update_crowding_distance(mut pareto_front: Vec<Portfolio>) {
+fn calculate_and_update_crowding_distance(pareto_front: &mut Vec<Portfolio>) {
     // Helper function to help compute the crowding distance
     let get_objective_value = |portfolio: &Portfolio, objective_idx: usize| match objective_idx {
         0 => portfolio.average_returns,
@@ -356,13 +377,13 @@ fn non_dominated_sort(portfolios: &mut [Portfolio]) -> Vec<Vec<Portfolio>> {
     let mut current_front = 1;
     while !remaining_portfolios.is_empty() {
         // Find the Pareto front & Update Portfolio
-        let mut pareto_front = find_pareto_front(&mut remaining_portfolios);
+        let mut pareto_front = find_pareto_front(&remaining_portfolios);
         pareto_front.iter_mut().for_each(|portfolio| {
             portfolio.rank = Some(current_front);
         });
 
         // Modifies the crowding distances in-place
-        calculate_and_update_crowding_distance(pareto_front.clone());
+        calculate_and_update_crowding_distance(&mut pareto_front);
 
         // Then add it to the fronts list
         fronts.push(pareto_front.clone());
@@ -398,11 +419,15 @@ fn evolve_portfolios(
     assets_under_management: usize,
     money_to_invest: f64,
     risk_free_rate: f64,
+    elitism_rate: f64,
+    mutation_rate: f64,
     sampler: Sampler,
 ) {
     // Initialization Phase
     let rng = thread_rng();
     let uniform = Uniform::new(0., 1.);
+    let elite_population_size = ((population_size as f64) * elitism_rate) as usize;
+    let offspring_count = population_size - elite_population_size;
 
     // For each portfolio we sample from a Uniform and then normalize
     let mut population: Vec<Vec<f64>> = (0..population_size)
@@ -478,8 +503,92 @@ fn evolve_portfolios(
             })
             .collect();
 
-        let fronts = non_dominated_sort(&mut portfolio_structs);
+        let mut fronts = non_dominated_sort(&mut portfolio_structs);
+
+        // Prepare the population vector for next generation
+        population.clear(); // reset the vector
+
+        // Adding Elites (Exploitation)
+        for front in fronts.iter_mut() {
+            // Sort array before proceeding!
+            front.sort_by(|portfolio_a, portfolio_b| {
+                portfolio_a
+                    .partial_cmp(portfolio_b)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
+
+            for portfolio in front.iter() {
+                if population.len() >= elite_population_size {
+                    break;
+                }
+                population.push(portfolio.weights.clone());
+            }
+
+            if population.len() >= elite_population_size {
+                break;
+            }
+        }
+
+        let offsprings = generate_offsprings(&population, offspring_count, mutation_rate);
+        population.extend(offsprings);
     }
+}
+
+fn generate_offsprings(
+    population: &[Vec<f64>],
+    offspring_count: usize,
+    mutation_rate: f64,
+) -> Vec<Vec<f64>> {
+    let mut offsprings = Vec::new();
+
+    while offsprings.len() < offspring_count {
+        let (parent_1, parent_2) = select_parents(population);
+
+        let mut child_weights = crossover(&parent_1, &parent_2);
+
+        // Toss a coin and stochastically mutate weights based on rate
+        mutate(&mut child_weights, mutation_rate);
+
+        offsprings.push(child_weights);
+    }
+    offsprings
+}
+
+fn select_parents(population: &[Vec<f64>]) -> (Vec<f64>, Vec<f64>) {
+    let mut rng = thread_rng();
+    let parent_1 = &population[rng.gen_range(0..population.len())];
+    let parent_2 = &population[rng.gen_range(0..population.len())];
+
+    (parent_1.to_owned(), parent_2.to_owned())
+}
+
+fn crossover(parent_1: &Vec<f64>, parent_2: &Vec<f64>) -> Vec<f64> {
+    let mut rng = thread_rng();
+
+    parent_1
+        .iter()
+        .zip(parent_2.iter())
+        .map(|(&weight_1, &weight_2)| {
+            let alpha: f64 = rng.gen_range(0.0..1.0);
+            alpha * weight_1 + (1.0 - alpha) * weight_2
+        })
+        .collect()
+}
+
+fn mutate(weights: &mut Vec<f64>, mutation_rate: f64) {
+    let mut rng = thread_rng();
+
+    // Mutate
+    for weight in weights.iter_mut() {
+        if rng.gen_bool(mutation_rate) {
+            let change: f64 = rng.gen_range(-PERTURBATION..PERTURBATION);
+            *weight += change;
+        }
+    }
+
+    // Normalize again
+    let total: f64 = weights.iter().sum();
+    weights.iter_mut().for_each(|w| *w /= total);
 }
 
 fn compute_portfolio_performance(
@@ -535,7 +644,18 @@ fn main() {
         look_ahead: 2,
     };
 
-    evolve_portfolios(1, 1, 1000, 1, 4, 100_000_000., 0.02, normal_sampler);
+    evolve_portfolios(
+        1,
+        100,
+        100,
+        1000,
+        4,
+        100_000_000.,
+        0.02,
+        0.5,
+        0.1,
+        normal_sampler,
+    );
 
     let test = |x: f64| {
         println!("{}", x);
