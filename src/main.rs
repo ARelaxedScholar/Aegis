@@ -1,4 +1,5 @@
 use core::f64;
+use rand::seq::index::IndexVecIntoIter;
 use rayon::prelude::*;
 
 use crate::Sampler::{Normal, SupervisedNormal, _SeriesGAN};
@@ -16,7 +17,7 @@ use tch::{nn, CModule, Kind, TchError, Tensor};
 static SUPERVISOR: LazyLock<Result<CModule, TchError>> =
     LazyLock::new(|| CModule::load("../model_weights/supervisor.pt"));
 //static SUPERVISOR_INPUT_DIM = 4;//Trained at that dimension so I can't take more or less than that.
-
+const NUMBER_OF_OPTIMIZATION_OBJECTIVES: usize = 3;
 #[derive(Debug, Clone, PartialOrd)]
 struct Portfolio {
     id: usize,
@@ -298,7 +299,55 @@ fn find_pareto_front(portfolios: &[Portfolio]) -> Vec<Portfolio> {
         .collect()
 }
 
-fn calculate_crowding_distance(pareto_front: Vec<Portfolio>) {}
+fn calculate_and_update_crowding_distance(mut pareto_front: Vec<Portfolio>) {
+    // Helper function to help compute the crowding distance
+    let get_objective_value = |portfolio: &Portfolio, objective_idx: usize| match objective_idx {
+        0 => portfolio.average_returns,
+        1 => portfolio.volatility,
+        2 => portfolio.sharpe_ratio,
+        _ => panic!(
+            "You changed the number of objective without 
+            \nupdating the matching logic. Lel.
+            Reached a part of the code that shouldn't be reached"
+        ),
+    };
+
+    // Initialize the distances
+    pareto_front
+        .iter_mut()
+        .for_each(|portfolio| portfolio.crowding_distance = Some(0.0));
+
+    for objective_idx in 0..NUMBER_OF_OPTIMIZATION_OBJECTIVES {
+        // sort with respect to current objective
+        pareto_front.sort_by(|portfolio_a, portfolio_b| {
+            let portfolio_a_objective_value = get_objective_value(portfolio_a, objective_idx);
+            let portfolio_b_objective_value = get_objective_value(portfolio_b, objective_idx);
+
+            portfolio_a_objective_value
+                .partial_cmp(&portfolio_b_objective_value)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+
+        // Keep the best and worst (boundaries) by assigning infinite crowding distance
+        let last_index = pareto_front.len() - 1;
+        pareto_front[0].crowding_distance = Some(f64::INFINITY);
+        pareto_front[last_index].crowding_distance = Some(f64::INFINITY);
+
+        let min_value = get_objective_value(&pareto_front[0], objective_idx);
+        let max_value = get_objective_value(&pareto_front[last_index], objective_idx);
+        let range = max_value - min_value;
+
+        if range > 0.0 {
+            for i in 1..pareto_front.len() - 1 {
+                let previous = get_objective_value(&pareto_front[i - 1], objective_idx);
+                let next = get_objective_value(&pareto_front[i + 1], objective_idx);
+                let current_distance = pareto_front[i].crowding_distance.unwrap_or(0.0);
+                pareto_front[i].crowding_distance =
+                    Some(current_distance + (next - previous) / range);
+            }
+        }
+    }
+}
 
 fn non_dominated_sort(portfolios: &mut [Portfolio]) -> Vec<Vec<Portfolio>> {
     let mut fronts: Vec<Vec<Portfolio>> = Vec::new();
@@ -313,7 +362,7 @@ fn non_dominated_sort(portfolios: &mut [Portfolio]) -> Vec<Vec<Portfolio>> {
         });
 
         // Modifies the crowding distances in-place
-        calculate_crowding_distance(pareto_front.clone());
+        calculate_and_update_crowding_distance(pareto_front.clone());
 
         // Then add it to the fronts list
         fronts.push(pareto_front.clone());
