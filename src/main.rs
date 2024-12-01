@@ -422,6 +422,7 @@ fn evolve_portfolios(
     elitism_rate: f64,
     mutation_rate: f64,
     sampler: Sampler,
+    generation_check_interval: usize,
 ) {
     // Initialization Phase
     let rng = thread_rng();
@@ -439,11 +440,22 @@ fn evolve_portfolios(
                 .collect::<Vec<f64>>();
             let magnitude = portfolio.iter().sum::<f64>();
 
-            portfolio.iter().map(|x| x / magnitude).collect()
+            portfolio.iter_mut().for_each(|x| *x /= magnitude);
+            portfolio
         })
         .collect::<Vec<_>>();
 
-    // We'd want to compute for each day
+    // Metrics Vectors
+    let mut best_average_return_per_generation: Vec<f64> = Vec::with_capacity(generations);
+    let mut average_return_per_generation: Vec<f64> = Vec::with_capacity(generations);
+
+    let mut best_average_volatility_per_generation: Vec<f64> = Vec::with_capacity(generations);
+    let mut average_volatility_per_generation: Vec<f64> = Vec::with_capacity(generations);
+
+    let mut best_average_sharpe_ratio_per_generation: Vec<f64> = Vec::with_capacity(generations);
+    let mut average_sharpe_ratio_per_generation: Vec<f64> = Vec::with_capacity(generations);
+
+    // EVOLUTION BABY!!!
     for generation in 0..generations {
         // Reset Arrays for Generation
         let mut simulation_average_returns: Vec<f64> = vec![0.; population_size];
@@ -487,6 +499,39 @@ fn evolve_portfolios(
             .par_iter_mut()
             .for_each(|sharpe_ratio| *sharpe_ratio /= simulations_per_generation as f64);
 
+        // PREPARING & REPORTING METRICS FOR GENERATION
+        // Bests
+        best_average_return_per_generation[generation] = simulation_average_returns // Higher is better
+            .iter()
+            .fold(f64::NEG_INFINITY, |a, b| a.max(*b));
+        best_average_volatility_per_generation[generation] = simulation_average_volatilities // Lower is better
+            .iter()
+            .fold(f64::INFINITY, |a, b| a.min(*b));
+        best_average_sharpe_ratio_per_generation[generation] = simulation_average_sharpe_ratios // Higher is better
+            .iter()
+            .fold(f64::NEG_INFINITY, |a, b| a.max(*b));
+
+        // Averages
+        average_return_per_generation[generation] =
+            simulation_average_returns.iter().sum::<f64>() / (population_size as f64);
+        average_volatility_per_generation[generation] =
+            simulation_average_volatilities.iter().sum::<f64>() / (population_size as f64);
+        average_sharpe_ratio_per_generation[generation] =
+            simulation_average_sharpe_ratios.iter().sum::<f64>() / (population_size as f64);
+
+        if (generation % generation_check_interval == 0) || (generation == generations - 1) {
+            println!(
+    "Generation {}: Best Return: {:.4}, Avg Return: {:.4}, Best Sharpe: {:.4}, Avg Sharpe: {:.4}, Best Volatility: {:.4}, Avg Volatility: {:.4}",
+    generation+1,
+    best_average_return_per_generation[generation],
+    average_return_per_generation[generation],
+    best_average_sharpe_ratio_per_generation[generation],
+    average_sharpe_ratio_per_generation[generation],
+    best_average_volatility_per_generation[generation],
+    average_volatility_per_generation[generation],
+);
+        }
+        // NEXT GENERATION CREATION LOGIC
         // Initialize the Structs and then find Pareto Front
         let portfolio_simulation_averages: Vec<(Vec<f64>, f64, f64, f64)> = izip!(
             population.clone(),
@@ -655,6 +700,7 @@ fn main() {
         0.5,
         0.1,
         normal_sampler,
+        10,
     );
 
     let test = |x: f64| {
