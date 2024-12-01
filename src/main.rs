@@ -104,11 +104,11 @@ impl Portfolio {
 enum Sampler {
     _Normal {
         normal_distribution: MultivariateNormal,
-        days_to_sample: usize,
+        periods_to_sample: usize,
     },
     SupervisedNormal {
         normal_distribution: MultivariateNormal,
-        days_to_sample: usize,
+        periods_to_sample: usize,
         look_ahead: usize,
     }, //uses the supervisor to supervise a normal so that hopefully it has the required temporal characteristics
     _SeriesGAN(usize),
@@ -120,29 +120,29 @@ impl Sampler {
         match self {
             Sampler::_Normal {
                 normal_distribution,
-                days_to_sample,
+                periods_to_sample,
             } => normal_distribution
                 .sample_iter(&mut rng)
-                .take(*days_to_sample)
+                .take(*periods_to_sample)
                 .collect::<Vec<_>>(),
             Sampler::SupervisedNormal {
                 normal_distribution,
-                days_to_sample,
+                periods_to_sample,
                 look_ahead,
             } => {
                 let raw_normal_sequence = normal_distribution
                     .sample_iter(&mut rng)
-                    .take(*days_to_sample + look_ahead)
+                    .take(*periods_to_sample + look_ahead)
                     .collect::<Vec<_>>();
                 Sampler::supervise_sequence(raw_normal_sequence, *look_ahead) //returns supervised_sequence
             }
-            Sampler::_SeriesGAN(days_to_sample) => {
+            Sampler::_SeriesGAN(periods_to_sample) => {
                 //
                 let mut rng = thread_rng();
                 let dist = MultivariateNormal::new(vec![0.0, 1.0], vec![1., 0., 0., 1.])
                     .expect("Multivariate normal");
                 dist.sample_iter(&mut rng)
-                    .take(*days_to_sample)
+                    .take(*periods_to_sample)
                     .collect::<Vec<_>>()
             }
         }
@@ -728,14 +728,14 @@ fn compute_portfolio_performance(
     let percent_annualized_volatility = annualized_volatility / money_to_invest;
 
     // Adjust risk-free rate to the provided time horizon
-    let risk_free_return = money_to_invest * risk_free_rate * time_horizon_in_years;
+    let risk_free_return = money_to_invest * risk_free_rate;
 
     let sharpe_ratio = if volatility != 0.0 {
-        (average_return - risk_free_return) / volatility
-    } else if average_return > risk_free_return {
+        (annualized_return - risk_free_return) / annualized_volatility
+    } else if annualized_return > risk_free_return {
         // Portfolio offers a guaranteed return above the risk-free rate
         f64::MAX // Or a large constant like 1e6
-    } else if average_return < risk_free_return {
+    } else if annualized_return < risk_free_return {
         // Portfolio offers a guaranteed return below the risk-free rate
         f64::MIN // Or a large negative constant like -1e6
     } else {
@@ -762,7 +762,7 @@ fn main() {
     let mvn_dimension = mvn.mean().expect("VecStorage of means").len();
     let normal_sampler = Sampler::SupervisedNormal {
         normal_distribution: mvn,
-        days_to_sample: 30,
+        periods_to_sample: 30,
         look_ahead: 2,
     };
 
