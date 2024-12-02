@@ -16,6 +16,25 @@ static SUPERVISOR: LazyLock<Result<CModule, TchError>> =
 //static SUPERVISOR_INPUT_DIM = 4;//Trained at that dimension so I can't take more or less than that.
 const NUMBER_OF_OPTIMIZATION_OBJECTIVES: usize = 3;
 const PERTURBATION: f64 = 0.01;
+const UNSCALED_MEANS: (f64, f64, f64, f64) = (121.25030248, 61.86589531, 73.73191426, 36.73631967);
+const UNSCALED_COV: [f64; 4 * 4] = [
+    4.66704616e+01,
+    8.73746363e-01,
+    1.03911088e+00,
+    6.21559427e+00,
+    8.73746363e-01,
+    1.57423688e-01,
+    5.28491535e-01,
+    4.24114881e-02,
+    1.03911088e+00,
+    5.28491535e-01,
+    6.72981173e+00,
+    -1.23283122e+00,
+    6.21559427e+00,
+    4.24114881e-02,
+    -1.23283122e+00,
+    9.15228952e+00,
+];
 
 #[derive(Debug, Clone)]
 struct Portfolio {
@@ -753,13 +772,15 @@ fn compute_portfolio_performance(
 // Algo Code
 fn main() {
     let mvn = MultivariateNormal::new(
-        vec![0., 0., 0., 0.],
         vec![
-            1., 0., 0., 0., 0., 1., 0., 0., 0., 0., 1., 0., 0., 0., 0., 1.,
+            UNSCALED_MEANS.0,
+            UNSCALED_MEANS.1,
+            UNSCALED_MEANS.2,
+            UNSCALED_MEANS.3,
         ],
+        UNSCALED_COV.to_vec(),
     )
     .expect("Wanted a multivariate normal");
-    let mvn_dimension = mvn.mean().expect("VecStorage of means").len();
     let normal_sampler = Sampler::SupervisedNormal {
         normal_distribution: mvn,
         periods_to_sample: 30,
