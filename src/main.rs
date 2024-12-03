@@ -1,5 +1,8 @@
 use core::f64;
 use rayon::prelude::*;
+use serde::{Deserialize, Serialize};
+use std::fs::File;
+use std::io::{Read, Write};
 
 use itertools::izip;
 use nalgebra::DVector;
@@ -36,7 +39,7 @@ const UNSCALED_COV: [f64; 4 * 4] = [
     9.15228952e+00,
 ];
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct Portfolio {
     id: usize,
     rank: Option<usize>,
@@ -430,6 +433,7 @@ struct EvolutionConfig {
     generation_check_interval: usize,
 }
 
+#[derive(Serialize, Deserialize, Debug)]
 struct EvolutionResult {
     pareto_fronts: Vec<Vec<Portfolio>>,
     best_average_return_per_generation: Vec<f64>,
@@ -787,11 +791,11 @@ fn main() {
         look_ahead: 2,
     };
 
-    evolve_portfolios(EvolutionConfig {
+    let results = evolve_portfolios(EvolutionConfig {
         time_horizon_in_days: 30,
         generations: 100,
         population_size: 100,
-        simulations_per_generation: 10_000,
+        simulations_per_generation: 3_000,
         assets_under_management: 4,
         money_to_invest: 1_000_000_000.,
         risk_free_rate: 0.02,
@@ -801,8 +805,10 @@ fn main() {
         generation_check_interval: 10,
     });
 
-    let test = |x: f64| {
-        println!("{}", x);
-    };
-    test(5.);
+    // Save as file
+    let json = serde_json::to_string(&results).expect("To be able to serialize this");
+    let file = File::create("../saved_evolution_results/run_1.json");
+    file.expect("A valid file path to open")
+        .write_all(json.as_bytes())
+        .expect("Kinda praying that this saves rn");
 }
