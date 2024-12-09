@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::fs::File;
 use std::io::{Read, Write};
 
-use itertools::izip;
+use itertools::{izip, Itertools};
 use nalgebra::DVector;
 use rand::distributions::Uniform;
 use rand::prelude::*;
@@ -19,6 +19,32 @@ static SUPERVISOR: LazyLock<Result<CModule, TchError>> =
 //static SUPERVISOR_INPUT_DIM = 4;//Trained at that dimension so I can't take more or less than that.
 const NUMBER_OF_OPTIMIZATION_OBJECTIVES: usize = 3;
 const PERTURBATION: f64 = 0.01;
+
+const LOG_RETURNS_MEANS: (f64, f64, f64, f64) = (
+    5.32273662e-04,
+    6.63425548e-05,
+    8.77944050e-05,
+    6.45186507e-05,
+);
+const LOG_RETURNS_COV: [f64; 4 * 4] = [
+    1.21196105e-04,
+    1.13364388e-06,
+    -2.25083039e-05,
+    1.18820847e-04,
+    1.13364388e-06,
+    2.24497315e-06,
+    5.60201102e-06,
+    1.27454505e-06,
+    -2.25083039e-05,
+    5.60201102e-06,
+    6.78149858e-05,
+    -2.89021031e-05,
+    1.18820847e-04,
+    1.27454505e-06,
+    -2.89021031e-05,
+    2.58077479e-04,
+];
+
 const UNSCALED_MEANS: (f64, f64, f64, f64) = (121.25030248, 61.86589531, 73.73191426, 36.73631967);
 const UNSCALED_COV: [f64; 4 * 4] = [
     4.66704616e+01,
@@ -123,8 +149,9 @@ impl Portfolio {
     }
 }
 // Sampler Code
+#[derive(Debug)]
 enum Sampler {
-    _Normal {
+    Normal {
         normal_distribution: MultivariateNormal,
         periods_to_sample: usize,
     },
@@ -133,59 +160,82 @@ enum Sampler {
         periods_to_sample: usize,
         look_ahead: usize,
     }, //uses the supervisor to supervise a normal so that hopefully it has the required temporal characteristics
-    _SeriesGAN(usize),
+    SeriesGAN(usize),
 }
 
 impl Sampler {
+    /// Honestly, only the superverised normal needs the price scenarios
+    /// and for theoretical reasons this is gibberish, so it will be revamped later.
+    /// But for now we leave it as this.
     fn sample_price_scenario(&self) -> Vec<DVector<f64>> {
         let mut rng = thread_rng();
         match self {
-            Sampler::_Normal {
+            Sampler::Normal {
                 normal_distribution,
                 periods_to_sample,
-            } => normal_distribution
-                .sample_iter(&mut rng)
-                .take(*periods_to_sample)
-                .collect::<Vec<_>>(),
+            } => vec![DVector::from_vec(vec![1.])], // SHOULDN'T BE CALLED TRUTHFULLY,
             Sampler::SupervisedNormal {
                 normal_distribution,
                 periods_to_sample,
                 look_ahead,
             } => {
+                // ARGUABLY USELESS, THIS ENTIRE SECTION NEEDS REVAMPING.
                 let raw_normal_sequence = normal_distribution
                     .sample_iter(&mut rng)
                     .take(*periods_to_sample + look_ahead)
                     .collect::<Vec<_>>();
                 Sampler::supervise_sequence(raw_normal_sequence, *look_ahead) //returns supervised_sequence
             }
-            Sampler::_SeriesGAN(periods_to_sample) => {
-                //
-                let mut rng = thread_rng();
-                let dist = MultivariateNormal::new(vec![0.0, 1.0], vec![1., 0., 0., 1.])
-                    .expect("Multivariate normal");
-                dist.sample_iter(&mut rng)
-                    .take(*periods_to_sample)
-                    .collect::<Vec<_>>()
+            Sampler::SeriesGAN(periods_to_sample) => {
+                // NOT IMPLEMENTED (WILL WRITE IT SO THAT THERE"S A MODEL THAT WAS TRAINED TO GENERATE THESE, NOT A PRIORITY)
+                vec![DVector::from_vec(vec![1.])]
             }
         }
     }
+    /// sample_returns
+    /// Takes method of Sampler object
+    ///
+    /// Returns a vector of vectors of f64.
+    ///
+    /// The goal is to sample returns according to different modalities.
     fn sample_returns(&self) -> Vec<Vec<f64>> {
-        let scenario = self.sample_price_scenario();
+        let mut rng = thread_rng();
+        match self {
+            Sampler::Normal {
+                normal_distribution,
+                periods_to_sample,
+            } => normal_distribution
+                .sample_iter(&mut rng)
+                .take(*periods_to_sample)
+                .map(|row| row.iter().cloned().collect())
+                .collect::<Vec<_>>(),
+            Sampler::SupervisedNormal {
+                normal_distribution,
+                periods_to_sample,
+                look_ahead,
+            } => {
+                let scenario = self.sample_price_scenario();
 
-        // Compute Returns
-        (0..scenario.len() - 1)
-            .into_par_iter()
-            .map(|t| {
-                let current_row = &scenario[t];
-                let next_row = &scenario[t + 1];
+                // Compute Returns
+                (0..scenario.len() - 1)
+                    .into_par_iter()
+                    .map(|t| {
+                        let current_row = &scenario[t];
+                        let next_row = &scenario[t + 1];
 
-                current_row
-                    .iter()
-                    .zip(next_row.iter())
-                    .map(|(current, next)| (next - current) / current)
-                    .collect::<Vec<f64>>()
-            })
-            .collect::<Vec<Vec<f64>>>()
+                        current_row
+                            .iter()
+                            .zip(next_row.iter())
+                            .map(|(current, next)| (next - current) / current)
+                            .collect::<Vec<f64>>()
+                    })
+                    .collect::<Vec<Vec<f64>>>()
+            }
+            Sampler::SeriesGAN(usize) => {
+                // THE MOST IMPORTANT ONE, WHEN I AM DONE IMPLEMENTING THIS HOPEFULLY GENERATING GOOD PORTFOLIOS WILL BE EASIER
+                vec![vec![1.]] //FOR NOW RETURNS UNIT
+            }
+        }
     }
     // SUPERVISOR FUNCTIONS
     fn find_min_max(raw_sequence: &[DVector<f64>]) -> Result<(Vec<(f64, f64)>, usize), String> {
@@ -585,7 +635,7 @@ fn evolve_portfolios(config: EvolutionConfig) -> EvolutionResult {
         if (generation % config.generation_check_interval == 0) || (generation == generations - 1) {
             println!(
     "Generation {}: Best Return: {:.4}, Avg Return: {:.4}, Best Sharpe: {:.4}, Avg Sharpe: {:.4}, Best Volatility: {:.4}, Avg Volatility: {:.4}",
-    generation+1,
+    generation,
     best_average_return_per_generation[generation],
     average_return_per_generation[generation],
     best_average_sharpe_ratio_per_generation[generation],
@@ -633,7 +683,6 @@ fn evolve_portfolios(config: EvolutionConfig) -> EvolutionResult {
         let offsprings = generate_offsprings(&population, offspring_count, config.mutation_rate);
         population.extend(offsprings);
     }
-
     //
     EvolutionResult {
         pareto_fronts: non_dominated_sort(&mut turn_weights_into_portfolios(
@@ -728,7 +777,7 @@ fn compute_portfolio_performance(
         .map(|row| {
             row.into_par_iter()
                 .zip(weights.par_iter())
-                .map(|(ret, weight)| ret * money_to_invest * weight)
+                .map(|(log_return, weight)| ((log_return.exp() - 1.0) * weight) * money_to_invest)
                 .sum::<f64>()
         })
         .collect::<Vec<f64>>();
@@ -775,40 +824,52 @@ fn compute_portfolio_performance(
 
 // Algo Code
 fn main() {
+    let monthly_scaler = 21;
     let mvn = MultivariateNormal::new(
         vec![
-            UNSCALED_MEANS.0,
-            UNSCALED_MEANS.1,
-            UNSCALED_MEANS.2,
-            UNSCALED_MEANS.3,
+            (monthly_scaler as f64) * LOG_RETURNS_MEANS.0,
+            (monthly_scaler as f64) * LOG_RETURNS_MEANS.1,
+            (monthly_scaler as f64) * LOG_RETURNS_MEANS.2,
+            (monthly_scaler as f64) * LOG_RETURNS_MEANS.3,
         ],
-        UNSCALED_COV.to_vec(),
+        LOG_RETURNS_COV
+            .into_iter()
+            .map(|cov_component| (monthly_scaler as f64) * cov_component)
+            .collect(),
     )
     .expect("Wanted a multivariate normal");
-    let normal_sampler = Sampler::SupervisedNormal {
-        normal_distribution: mvn,
-        periods_to_sample: 30,
-        look_ahead: 2,
-    };
 
-    let results = evolve_portfolios(EvolutionConfig {
-        time_horizon_in_days: 30,
-        generations: 100,
-        population_size: 100,
-        simulations_per_generation: 3_000,
-        assets_under_management: 4,
-        money_to_invest: 1_000_000_000.,
-        risk_free_rate: 0.02,
-        elitism_rate: 0.5,
-        mutation_rate: 0.1,
-        sampler: normal_sampler,
-        generation_check_interval: 10,
-    });
-
-    // Save as file
-    let json = serde_json::to_string(&results).expect("To be able to serialize this");
-    let file = File::create("../saved_evolution_results/run_1.json");
-    file.expect("A valid file path to open")
-        .write_all(json.as_bytes())
-        .expect("Kinda praying that this saves rn");
+    let repeats = 10;
+    let time_horizons = vec![100, 120, 140, 160, 180, 200, 220, 240, 260, 280, 300];
+    for time in time_horizons {
+        let mean = (0..repeats)
+            .map(|_| {
+                let normal_sampler = Sampler::Normal {
+                    normal_distribution: mvn.clone(),
+                    periods_to_sample: 15,
+                };
+                let start = std::time::Instant::now();
+                evolve_portfolios(EvolutionConfig {
+                    time_horizon_in_days: time,
+                    generations: 100,
+                    population_size: 100,
+                    simulations_per_generation: 10_000,
+                    assets_under_management: 4,
+                    money_to_invest: 1_000_000.,
+                    risk_free_rate: 0.02,
+                    elitism_rate: 0.05,
+                    mutation_rate: 0.1,
+                    sampler: normal_sampler,
+                    generation_check_interval: 10,
+                });
+                start.elapsed()
+            })
+            .collect::<Vec<_>>()
+            .iter()
+            .sum::<std::time::Duration>()
+            / repeats as u32;
+        println!("Mean Time taken: {:?}", mean);
+        println!("For one generation for a population size of 100 and doing 10,000 simulations per portfolio.\n When sampling for {time} steps\n
+        on a AMD Ryzen 5 5500U with Radeon Graphics");
+    }
 }
