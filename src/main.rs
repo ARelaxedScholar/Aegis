@@ -479,6 +479,7 @@ struct EvolutionConfig {
     risk_free_rate: f64,
     elitism_rate: f64,
     mutation_rate: f64,
+    tournament_size: usize,
     sampler: Sampler,
     generation_check_interval: usize,
 }
@@ -655,9 +656,7 @@ fn evolve_portfolios(config: EvolutionConfig) -> EvolutionResult {
         );
 
         let mut fronts = non_dominated_sort(&mut portfolio_structs);
-
-        // Prepare the population vector for next generation
-        population.clear(); // reset the vector
+        let mut next_generation: Vec<Vec<f64>> = Vec::new();
 
         // Adding Elites (Exploitation)
         for front in fronts.iter_mut() {
@@ -672,7 +671,7 @@ fn evolve_portfolios(config: EvolutionConfig) -> EvolutionResult {
                 if population.len() >= elite_population_size {
                     break;
                 }
-                population.push(portfolio.weights.clone());
+                next_generation.push(portfolio.weights.clone());
             }
 
             if population.len() >= elite_population_size {
@@ -680,8 +679,14 @@ fn evolve_portfolios(config: EvolutionConfig) -> EvolutionResult {
             }
         }
 
-        let offsprings = generate_offsprings(&population, offspring_count, config.mutation_rate);
-        population.extend(offsprings);
+        let offsprings = generate_offsprings(
+            &fronts.into_iter().flatten().collect::<Vec<Portfolio>>(),
+            offspring_count,
+            config.mutation_rate,
+            config.tournament_size,
+        );
+        next_generation.extend(offsprings);
+        population = next_generation;
     }
     //
     EvolutionResult {
@@ -701,14 +706,15 @@ fn evolve_portfolios(config: EvolutionConfig) -> EvolutionResult {
 }
 
 fn generate_offsprings(
-    population: &[Vec<f64>],
+    population: &[Portfolio],
     offspring_count: usize,
     mutation_rate: f64,
+    k: usize,
 ) -> Vec<Vec<f64>> {
     let mut offsprings = Vec::new();
 
     while offsprings.len() < offspring_count {
-        let (parent_1, parent_2) = select_parents(population);
+        let (parent_1, parent_2) = select_parents(population, k);
 
         let mut child_weights = crossover(&parent_1, &parent_2);
 
@@ -720,12 +726,19 @@ fn generate_offsprings(
     offsprings
 }
 
-fn select_parents(population: &[Vec<f64>]) -> (Vec<f64>, Vec<f64>) {
-    let mut rng = thread_rng();
-    let parent_1 = &population[rng.gen_range(0..population.len())];
-    let parent_2 = &population[rng.gen_range(0..population.len())];
+fn select_parents(population: &[Portfolio], k: usize) -> (Vec<f64>, Vec<f64>) {
+    let parent_1 = tournament_selection(population, 2);
+    let parent_2 = tournament_selection(population, 2);
 
     (parent_1.to_owned(), parent_2.to_owned())
+}
+
+fn tournament_selection(population: &[Portfolio], k: usize) -> Vec<f64> {
+    let mut rng = thread_rng();
+    let mut k_portfolios: Vec<Portfolio> =
+        population.choose_multiple(&mut rng, k).cloned().collect();
+    k_portfolios.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Less));
+    k_portfolios[0].weights.clone()
 }
 
 fn crossover(parent_1: &Vec<f64>, parent_2: &Vec<f64>) -> Vec<f64> {
@@ -859,6 +872,7 @@ fn main() {
                     risk_free_rate: 0.02,
                     elitism_rate: 0.05,
                     mutation_rate: 0.1,
+                    tournament_size: 5,
                     sampler: normal_sampler,
                     generation_check_interval: 10,
                 });
