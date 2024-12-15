@@ -1,7 +1,7 @@
 use core::f64;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
-use std::fs::File;
+use std::fs::{create_dir_all, File};
 use std::io::{Read, Write};
 
 use itertools::{izip, Itertools};
@@ -852,19 +852,35 @@ fn main() {
     )
     .expect("Wanted a multivariate normal");
 
+    match create_dir_all("results") {
+        Ok(_) => {}
+        Err(err) => println!("An error occured: {}", err),
+    }
+    let save_result = |evolution_result: EvolutionResult,
+                       time_horizon: usize,
+                       repeat: usize|
+     -> Result<(), Box<dyn std::error::Error>> {
+        let mut file = File::create(format!(
+            "results/evolution_time_{}_run_{}",
+            time_horizon, repeat
+        ))?;
+        serde_json::to_writer_pretty(file, &evolution_result)?;
+        Ok(())
+    };
+
     let repeats = 10;
     let time_horizons = vec![100, 120, 140, 160, 180, 200, 220, 240, 260, 280, 300];
     for time in time_horizons {
         let mean = (0..repeats)
-            .map(|_| {
+            .map(|repeat| {
                 let normal_sampler = Sampler::Normal {
                     normal_distribution: mvn.clone(),
                     periods_to_sample: 15,
                 };
                 let start = std::time::Instant::now();
-                evolve_portfolios(EvolutionConfig {
+                let evolution_result = evolve_portfolios(EvolutionConfig {
                     time_horizon_in_days: time,
-                    generations: 100,
+                    generations: 1,
                     population_size: 100,
                     simulations_per_generation: 10_000,
                     assets_under_management: 4,
@@ -876,6 +892,10 @@ fn main() {
                     sampler: normal_sampler,
                     generation_check_interval: 10,
                 });
+                match save_result(evolution_result, time, repeat) {
+                    Ok(_) => {}
+                    Err(err) => println!("An error occured: {}", err),
+                }
                 start.elapsed()
             })
             .collect::<Vec<_>>()
