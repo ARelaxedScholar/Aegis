@@ -689,6 +689,8 @@ dependencies = [
  "ndarray 0.16.1",
  "rand",
  "rayon",
+ "serde",
+ "serde_json",
  "statrs",
  "tch",
 ]

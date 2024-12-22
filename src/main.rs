@@ -1,22 +1,21 @@
+// IMPORTS
 use core::f64;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
-use std::fs::{create_dir_all, File};
-use std::io::{Read, Write};
 
-use itertools::{izip, Itertools};
-use nalgebra::DVector;
+use crate::portfolio::portoflio::Portfolio;
+use crate::sampling::sampling::Sampler;
+use itertools::izip;
 use rand::distributions::Uniform;
 use rand::prelude::*;
 use statrs::distribution::MultivariateNormal;
-use statrs::statistics::MeanN;
-use std::sync::atomic::AtomicUsize;
-use std::sync::{atomic::Ordering, LazyLock};
-use tch::{CModule, Kind, TchError, Tensor};
 
-static SUPERVISOR: LazyLock<Result<CModule, TchError>> =
-    LazyLock::new(|| CModule::load("../model_weights/supervisor.pt"));
-//static SUPERVISOR_INPUT_DIM = 4;//Trained at that dimension so I can't take more or less than that.
+// Modules
+mod portfolio;
+mod sampling;
+
+// Actual Code
+static SUPERVISOR_INPUT_DIM: usize = 4; //Trained at that dimension so I can't take more or less than that.
 const NUMBER_OF_OPTIMIZATION_OBJECTIVES: usize = 3;
 const PERTURBATION: f64 = 0.01;
 
@@ -44,335 +43,6 @@ const LOG_RETURNS_COV: [f64; 4 * 4] = [
     -2.89021031e-05,
     2.58077479e-04,
 ];
-
-const UNSCALED_MEANS: (f64, f64, f64, f64) = (121.25030248, 61.86589531, 73.73191426, 36.73631967);
-const UNSCALED_COV: [f64; 4 * 4] = [
-    4.66704616e+01,
-    8.73746363e-01,
-    1.03911088e+00,
-    6.21559427e+00,
-    8.73746363e-01,
-    1.57423688e-01,
-    5.28491535e-01,
-    4.24114881e-02,
-    1.03911088e+00,
-    5.28491535e-01,
-    6.72981173e+00,
-    -1.23283122e+00,
-    6.21559427e+00,
-    4.24114881e-02,
-    -1.23283122e+00,
-    9.15228952e+00,
-];
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct Portfolio {
-    id: usize,
-    rank: Option<usize>,
-    crowding_distance: Option<f64>,
-    weights: Vec<f64>,
-    average_returns: f64,
-    volatility: f64,
-    sharpe_ratio: f64,
-}
-
-impl PartialEq for Portfolio {
-    fn eq(&self, other: &Self) -> bool {
-        self.id == other.id
-    }
-}
-impl PartialOrd for Portfolio {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        // if ID is the same return equal
-        if self.id == other.id {
-            return Some(std::cmp::Ordering::Equal);
-        }
-
-        // Compare based on rank
-        if self.rank != other.rank {
-            return self.rank.partial_cmp(&other.rank);
-        }
-        // If Rank is the same compare based on Crowding_Distance
-        match (self.crowding_distance, other.crowding_distance) {
-            (Some(self_distance), Some(other_distance)) => {
-                self_distance.partial_cmp(&other_distance)
-            }
-            _ => panic!("Crowding distance is None for one or both portfolios."), //shouldn't happen after processing
-        }
-    }
-}
-impl Eq for Portfolio {}
-static PORTFOLIO_ID_COUNTER: AtomicUsize = AtomicUsize::new(0);
-
-impl Portfolio {
-    fn new(weights: Vec<f64>, average_returns: f64, volatility: f64, sharpe_ratio: f64) -> Self {
-        let id = PORTFOLIO_ID_COUNTER.fetch_add(1, Ordering::SeqCst);
-        let rank = None;
-        let crowding_distance = None;
-        Portfolio {
-            id,
-            rank,
-            crowding_distance,
-            weights,
-            average_returns,
-            volatility,
-            sharpe_ratio,
-        }
-    }
-
-    fn to_metrics_vector(&self) -> Vec<f64> {
-        // We negate the self.volatility to make maximization the global goal
-        vec![self.average_returns, -self.volatility, self.sharpe_ratio]
-    }
-
-    fn is_dominated_by(&self, other: &Portfolio) -> bool {
-        let self_metrics = self.to_metrics_vector();
-        let other_metrics = other.to_metrics_vector();
-        // Dominating implies being better in one area, while not being worse in any other compared
-        // to other. Logically, if we are better than other in at least one we can't be dominated.
-        let better_in_at_least_one = self_metrics
-            .iter()
-            .zip(other_metrics.iter())
-            .any(|(&self_metric, &other_metric)| self_metric > other_metric);
-
-        // We check that other_metric is dominating (better than) in at least one category, if that is the case, self cannot
-        // be in the Pareto front and is therefore dominated
-        let dominated = self_metrics
-            .iter()
-            .zip(other_metrics.iter())
-            .any(|(&self_metric, &other_metric)| self_metric < other_metric);
-
-        // If better_in_at_least_one is true, we complement it since we want to return whether we're dominated
-        // If we know we are worse in one metric, we know we are dominated
-        // Both must be true for self to be part of the Pareto Front
-        !better_in_at_least_one && dominated
-    }
-}
-// Sampler Code
-#[derive(Debug)]
-enum Sampler {
-    Normal {
-        normal_distribution: MultivariateNormal,
-        periods_to_sample: usize,
-    },
-    SupervisedNormal {
-        normal_distribution: MultivariateNormal,
-        periods_to_sample: usize,
-        look_ahead: usize,
-    }, //uses the supervisor to supervise a normal so that hopefully it has the required temporal characteristics
-    SeriesGAN(usize),
-}
-
-impl Sampler {
-    /// Honestly, only the superverised normal needs the price scenarios
-    /// and for theoretical reasons this is gibberish, so it will be revamped later.
-    /// But for now we leave it as this.
-    fn sample_price_scenario(&self) -> Vec<DVector<f64>> {
-        let mut rng = thread_rng();
-        match self {
-            Sampler::Normal {
-                normal_distribution,
-                periods_to_sample,
-            } => vec![DVector::from_vec(vec![1.])], // SHOULDN'T BE CALLED TRUTHFULLY,
-            Sampler::SupervisedNormal {
-                normal_distribution,
-                periods_to_sample,
-                look_ahead,
-            } => {
-                // ARGUABLY USELESS, THIS ENTIRE SECTION NEEDS REVAMPING.
-                let raw_normal_sequence = normal_distribution
-                    .sample_iter(&mut rng)
-                    .take(*periods_to_sample + look_ahead)
-                    .collect::<Vec<_>>();
-                Sampler::supervise_sequence(raw_normal_sequence, *look_ahead) //returns supervised_sequence
-            }
-            Sampler::SeriesGAN(periods_to_sample) => {
-                // NOT IMPLEMENTED (WILL WRITE IT SO THAT THERE"S A MODEL THAT WAS TRAINED TO GENERATE THESE, NOT A PRIORITY)
-                vec![DVector::from_vec(vec![1.])]
-            }
-        }
-    }
-    /// sample_returns
-    /// Takes method of Sampler object
-    ///
-    /// Returns a vector of vectors of f64.
-    ///
-    /// The goal is to sample returns according to different modalities.
-    fn sample_returns(&self) -> Vec<Vec<f64>> {
-        let mut rng = thread_rng();
-        match self {
-            Sampler::Normal {
-                normal_distribution,
-                periods_to_sample,
-            } => normal_distribution
-                .sample_iter(&mut rng)
-                .take(*periods_to_sample)
-                .map(|row| row.iter().cloned().collect())
-                .collect::<Vec<_>>(),
-            Sampler::SupervisedNormal {
-                normal_distribution,
-                periods_to_sample,
-                look_ahead,
-            } => {
-                let scenario = self.sample_price_scenario();
-
-                // Compute Returns
-                (0..scenario.len() - 1)
-                    .into_par_iter()
-                    .map(|t| {
-                        let current_row = &scenario[t];
-                        let next_row = &scenario[t + 1];
-
-                        current_row
-                            .iter()
-                            .zip(next_row.iter())
-                            .map(|(current, next)| (next - current) / current)
-                            .collect::<Vec<f64>>()
-                    })
-                    .collect::<Vec<Vec<f64>>>()
-            }
-            Sampler::SeriesGAN(usize) => {
-                // THE MOST IMPORTANT ONE, WHEN I AM DONE IMPLEMENTING THIS HOPEFULLY GENERATING GOOD PORTFOLIOS WILL BE EASIER
-                vec![vec![1.]] //FOR NOW RETURNS UNIT
-            }
-        }
-    }
-    // SUPERVISOR FUNCTIONS
-    fn find_min_max(raw_sequence: &[DVector<f64>]) -> Result<(Vec<(f64, f64)>, usize), String> {
-        if raw_sequence.is_empty() {
-            return Err("Passed an empty sequence to supervisor".to_string());
-        }
-        let dimension = raw_sequence[0].len(); // access first row and then check the number of elements
-                                               // must be in this order so that any value is less than INFINITY, and any value is bigger than NEG_INFINITY
-        let mut min_max = vec![(f64::INFINITY, f64::NEG_INFINITY); dimension];
-
-        for row in raw_sequence.iter() {
-            for (col_idx, &value) in row.iter().enumerate() {
-                let (min, max) = &mut min_max[col_idx];
-                *min = (*min).min(value);
-                *max = (*max).max(value);
-            }
-        }
-        Ok((min_max, dimension))
-    }
-    fn supervisor_pass(
-        preprocessed_sequence: Vec<DVector<f64>>,
-        look_ahead: usize,
-        number_of_assets: usize,
-    ) -> Result<Vec<Vec<f64>>, String> {
-        if preprocessed_sequence.len() < look_ahead {
-            return Err(
-                "A sequence less than LOOK_BACK was passed to the supervisor pass.".to_string(),
-            );
-        }
-        // Prepare Slices for Training (reversed to match GRUs expectation)
-        let (inputs, input_lengths): (Vec<&[DVector<f64>]>, Vec<usize>) = (1
-            ..(preprocessed_sequence.len() + 1 - look_ahead))
-            .map(|i| (&preprocessed_sequence[..i], i))
-            .rev()
-            .unzip();
-
-        let extract_from_vec_storage =
-            |vec_storage: nalgebra::DVector<f64>| vec_storage.data.as_vec().clone();
-
-        let vectorized_inputs = inputs
-            .iter()
-            .map(|input_sequence| {
-                input_sequence
-                    .iter()
-                    .map(|stuff_inside| extract_from_vec_storage(stuff_inside.clone()))
-                    .collect::<Vec<_>>()
-            })
-            .collect::<Vec<_>>();
-
-        let max_length = input_lengths[0];
-
-        let tensor_vector = vectorized_inputs
-            .iter()
-            .zip(input_lengths.iter())
-            .map(|(input_sequence, &length)| {
-                Tensor::from_slice(
-                    &input_sequence
-                        .iter()
-                        .flatten()
-                        .copied()
-                        .collect::<Vec<f64>>(),
-                )
-                .reshape([length as i64, number_of_assets as i64])
-                .pad([0, 0, 0, (max_length - length) as i64], "constant", 0.0)
-            })
-            .collect::<Vec<_>>();
-
-        let stacked_tensor = Tensor::stack(&tensor_vector, 0);
-        let lengths_tensor = Tensor::from_slice(
-            &input_lengths
-                .into_iter()
-                .map(|x| x as i64)
-                .collect::<Vec<i64>>(),
-        );
-        let supervisor_input = vec![
-            stacked_tensor.to_kind(Kind::Float),
-            lengths_tensor.to_kind(Kind::Int64),
-        ];
-        // Note to me of tomorrow: Right now wrote the code for stacking and padding logic, review to make sure it makes sense.
-        // Then pass the thing to supervisor, stack the outputs into one vector and return that.
-        let outputs = SUPERVISOR
-            .as_ref()
-            .expect("The supervisor model to be used")
-            .forward_ts(&supervisor_input);
-
-        Ok(Vec::<Vec<f64>>::try_from(outputs.expect("Sequence"))
-            .expect("The OK variant of my Converted Supervised Sequence: "))
-    }
-    fn supervise_sequence(raw_sequence: Vec<DVector<f64>>, look_ahead: usize) -> Vec<DVector<f64>> {
-        let (min_max_columns, number_of_assets) = Sampler::find_min_max(&raw_sequence)
-            .expect("A list of tuples containing the Min-Max of each column");
-
-        // // Define helper functions
-        let min_max_scaling = |value: f64, min: f64, max: f64| (value - min) / (max - min);
-        let undo_min_max_scaling =
-            |scaled_value: f64, min: f64, max: f64| scaled_value * (max - min) + min;
-
-        // Scaling is necessary since supervisor was trained on scaled sequences
-        let min_max_scaled_sequence: Vec<_> = raw_sequence
-            .iter()
-            .map(|row| {
-                // min-max scale all the entries
-                let scaled_row = row
-                    .iter()
-                    .enumerate()
-                    .map(|(i, &value)| {
-                        // presumes min_max_columns contains tuples s.t (min, max)
-                        min_max_scaling(value, min_max_columns[i].0, min_max_columns[i].1)
-                    })
-                    .collect();
-                DVector::from_vec(scaled_row)
-            })
-            .collect();
-
-        // Do Supervisor Pass to Supervise (predict 2 bits ahead until done)
-        let supervised_sequence =
-            Sampler::supervisor_pass(min_max_scaled_sequence, look_ahead, number_of_assets)
-                .expect("The supervised sequence.");
-
-        // Undo Scaling
-        let supervised_restored_sequence = supervised_sequence
-            .iter()
-            .map(|scaled_row| {
-                let unscaled_row = scaled_row
-                    .iter()
-                    .enumerate()
-                    .map(|(i, &value)| {
-                        undo_min_max_scaling(value, min_max_columns[i].0, min_max_columns[i].1)
-                    })
-                    .collect();
-                DVector::from_vec(unscaled_row)
-            })
-            .collect();
-
-        supervised_restored_sequence
-    }
-}
 
 fn find_pareto_front(portfolios: &[Portfolio]) -> Vec<Portfolio> {
     // Find all the dominated portfolios within batch
@@ -633,18 +303,18 @@ fn evolve_portfolios(config: EvolutionConfig) -> EvolutionResult {
         average_sharpe_ratio_per_generation[generation] =
             simulation_average_sharpe_ratios.iter().sum::<f64>() / (population_size as f64);
 
-        if (generation % config.generation_check_interval == 0) || (generation == generations - 1) {
-            println!(
-    "Generation {}: Best Return: {:.4}, Avg Return: {:.4}, Best Sharpe: {:.4}, Avg Sharpe: {:.4}, Best Volatility: {:.4}, Avg Volatility: {:.4}",
-    generation,
-    best_average_return_per_generation[generation],
-    average_return_per_generation[generation],
-    best_average_sharpe_ratio_per_generation[generation],
-    average_sharpe_ratio_per_generation[generation],
-    best_average_volatility_per_generation[generation],
-    average_volatility_per_generation[generation],
-);
-        }
+        //         if (generation % config.generation_check_interval == 0) || (generation == generations - 1) {
+        //             println!(
+        //     "Generation {}: Best Return: {:.4}, Avg Return: {:.4}, Best Sharpe: {:.4}, Avg Sharpe: {:.4}, Best Volatility: {:.4}, Avg Volatility: {:.4}",
+        //     generation,
+        //     best_average_return_per_generation[generation],
+        //     average_return_per_generation[generation],
+        //     best_average_sharpe_ratio_per_generation[generation],
+        //     average_sharpe_ratio_per_generation[generation],
+        //     best_average_volatility_per_generation[generation],
+        //     average_volatility_per_generation[generation],
+        // );
+        //         }
         // NEXT GENERATION CREATION LOGIC
         // Initialize the Structs and then find Pareto Front
 
@@ -851,59 +521,4 @@ fn main() {
             .collect(),
     )
     .expect("Wanted a multivariate normal");
-
-    match create_dir_all("results") {
-        Ok(_) => {}
-        Err(err) => println!("An error occured: {}", err),
-    }
-    let save_result = |evolution_result: EvolutionResult,
-                       time_horizon: usize,
-                       repeat: usize|
-     -> Result<(), Box<dyn std::error::Error>> {
-        let mut file = File::create(format!(
-            "results/evolution_time_{}_run_{}",
-            time_horizon, repeat
-        ))?;
-        serde_json::to_writer_pretty(file, &evolution_result)?;
-        Ok(())
-    };
-
-    let repeats = 10;
-    let time_horizons = vec![100, 120, 140, 160, 180, 200, 220, 240, 260, 280, 300];
-    for time in time_horizons {
-        let mean = (0..repeats)
-            .map(|repeat| {
-                let normal_sampler = Sampler::Normal {
-                    normal_distribution: mvn.clone(),
-                    periods_to_sample: 15,
-                };
-                let start = std::time::Instant::now();
-                let evolution_result = evolve_portfolios(EvolutionConfig {
-                    time_horizon_in_days: time,
-                    generations: 1,
-                    population_size: 100,
-                    simulations_per_generation: 10_000,
-                    assets_under_management: 4,
-                    money_to_invest: 1_000_000.,
-                    risk_free_rate: 0.02,
-                    elitism_rate: 0.05,
-                    mutation_rate: 0.1,
-                    tournament_size: 5,
-                    sampler: normal_sampler,
-                    generation_check_interval: 10,
-                });
-                match save_result(evolution_result, time, repeat) {
-                    Ok(_) => {}
-                    Err(err) => println!("An error occured: {}", err),
-                }
-                start.elapsed()
-            })
-            .collect::<Vec<_>>()
-            .iter()
-            .sum::<std::time::Duration>()
-            / repeats as u32;
-        println!("Mean Time taken: {:?}", mean);
-        println!("For one generation for a population size of 100 and doing 10,000 simulations per portfolio.\n When sampling for {time} steps\n
-        on a AMD Ryzen 5 5500U with Radeon Graphics");
-    }
 }
