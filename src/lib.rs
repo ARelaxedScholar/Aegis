@@ -1,5 +1,7 @@
 // IMPORTS
 use core::f64;
+use pyo3::prelude::*;
+use pyo3::types::PyType;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 
@@ -505,20 +507,7 @@ fn compute_portfolio_performance(
     )
 }
 
-// Algo Code
-fn main() {
-    let monthly_scaler = 21;
-    let mvn = MultivariateNormal::new(
-        vec![
-            (monthly_scaler as f64) * LOG_RETURNS_MEANS.0,
-            (monthly_scaler as f64) * LOG_RETURNS_MEANS.1,
-            (monthly_scaler as f64) * LOG_RETURNS_MEANS.2,
-            (monthly_scaler as f64) * LOG_RETURNS_MEANS.3,
-        ],
-        LOG_RETURNS_COV
-            .into_iter()
-            .map(|cov_component| (monthly_scaler as f64) * cov_component)
-            .collect(),
-    )
-    .expect("Wanted a multivariate normal");
+#[pymodule]
+fn rusty_evolution(_py: Python, m: &PyModule) -> PyResult<()> {
+    Ok(())
 }
