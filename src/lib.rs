@@ -302,21 +302,6 @@ fn evolve_portfolios(config: EvolutionConfig) -> EvolutionResult {
         average_sharpe_ratio_per_generation[generation] =
             simulation_average_sharpe_ratios.iter().sum::<f64>() / (population_size as f64);
 
-        //         if (generation % config.generation_check_interval == 0) || (generation == generations - 1) {
-        //             println!(
-        //     "Generation {}: Best Return: {:.4}, Avg Return: {:.4}, Best Sharpe: {:.4}, Avg Sharpe: {:.4}, Best Volatility: {:.4}, Avg Volatility: {:.4}",
-        //     generation,
-        //     best_average_return_per_generation[generation],
-        //     average_return_per_generation[generation],
-        //     best_average_sharpe_ratio_per_generation[generation],
-        //     average_sharpe_ratio_per_generation[generation],
-        //     best_average_volatility_per_generation[generation],
-        //     average_volatility_per_generation[generation],
-        // );
-        //         }
-        // NEXT GENERATION CREATION LOGIC
-        // Initialize the Structs and then find Pareto Front
-
         let mut portfolio_structs: Vec<Portfolio> = turn_weights_into_portfolios(
             population.clone(),
             simulation_average_returns.clone(),
