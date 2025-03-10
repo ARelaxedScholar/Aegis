@@ -1,9 +1,12 @@
 pub mod sampling {
     use rand::prelude::*;
+    use serde::{Deserialize, Serialize};
     use statrs::distribution::MultivariateNormal;
 
-    #[derive(Debug)]
+    #[pyclass]
+    #[derive(Debug, Clone, Deserialize, Serialize)]
     pub enum Sampler {
+        #[serde(skip)]
         Normal {
             normal_distribution: MultivariateNormal,
             periods_to_sample: usize,
@@ -16,7 +19,7 @@ pub mod sampling {
         /// and for theoretical reasons this is gibberish, so it will be revamped later.
         /// But for now we leave it as this.
         fn sample_price_scenario(&self) -> Vec<Vec<f64>> {
-            let mut rng = thread_rng();
+            let rng = thread_rng();
             match self {
                 Sampler::Normal {
                     normal_distribution,

@@ -1,8 +1,13 @@
+use crate::{
+    evolve_portfolios as native_evolve_portfolios, EvolutionConfig, EvolutionResult, Portfolio,
+    Sampler,
+};
 use pyo3::prelude::*;
 use pyo3::types::PyType;
+use serde::{Deserialize, Serialize};
 
 #[pyclass]
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 struct PyEvolutionConfig {
     time_horizon_in_days: usize,
     generations: usize,
@@ -18,7 +23,7 @@ struct PyEvolutionConfig {
     generation_check_interval: usize,
 }
 #[pyclass]
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 struct PyEvolutionResult {
     pareto_fronts: Vec<Vec<Portfolio>>,
     best_average_return_per_generation: Vec<f64>,
@@ -29,12 +34,13 @@ struct PyEvolutionResult {
     average_sharpe_ratio_per_generation: Vec<f64>,
 }
 
+#[pyfunction]
 fn evolve_portfolios(config: PyEvolutionConfig) -> PyEvolutionResult {
-    config : EvolutionConfig = config.into()
+    let config: EvolutionConfig = config.into();
     // call function
-    let evolution_result = crate::evolve_portfolios(PyEvolutionConfig)
-    // 
-    result : EvolutionResult = evolution_result.into()
+    let evolution_result = native_evolve_portfolios(config);
+    //
+    let result: PyEvolutionResult = evolution_result.into();
     result
 }
 
@@ -42,7 +48,7 @@ fn evolve_portfolios(config: PyEvolutionConfig) -> PyEvolutionResult {
 fn rusty_evolution(_py: Python, m: &PyModule) -> PyResult<()> {
     m.add_class::<PyEvolutionConfig>()?;
     m.add_class::<PyEvolutionResult>()?;
-    m.add_function(wrap_pyfunction!(run_evolution, m)?)?;
+    m.add_function(wrap_pyfunction!(evolve_portfolios, m)?)?;
     Ok(())
 }
 
@@ -74,7 +80,8 @@ impl From<EvolutionResult> for PyEvolutionResult {
             average_return_per_generation: result.average_return_per_generation,
             best_average_volatility_per_generation: result.best_average_volatility_per_generation,
             average_volatility_per_generation: result.average_volatility_per_generation,
-            best_average_sharpe_ratio_per_generation: result.best_average_sharpe_ratio_per_generation,
+            best_average_sharpe_ratio_per_generation: result
+                .best_average_sharpe_ratio_per_generation,
             average_sharpe_ratio_per_generation: result.average_sharpe_ratio_per_generation,
         }
     }

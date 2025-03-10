@@ -12,8 +12,8 @@ use statrs::distribution::MultivariateNormal;
 
 // Modules
 mod portfolio;
-mod sampling;
 mod python_bindings;
+mod sampling;
 
 // Actual Code
 static SUPERVISOR_INPUT_DIM: usize = 4; //Trained at that dimension so I can't take more or less than that.
@@ -488,5 +488,3 @@ fn compute_portfolio_performance(
         sharpe_ratio,
     )
 }
-
-
