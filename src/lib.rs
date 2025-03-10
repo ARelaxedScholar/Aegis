@@ -1,7 +1,5 @@
 // IMPORTS
 use core::f64;
-use pyo3::prelude::*;
-use pyo3::types::PyType;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 
@@ -15,6 +13,7 @@ use statrs::distribution::MultivariateNormal;
 // Modules
 mod portfolio;
 mod sampling;
+mod python_bindings;
 
 // Actual Code
 static SUPERVISOR_INPUT_DIM: usize = 4; //Trained at that dimension so I can't take more or less than that.
@@ -176,8 +175,6 @@ struct EvolutionResult {
 // 4.ii solutions that would be allowed to reproduce using crossover.
 // 4.iii We'd also mutate the allocation stochastically in such away tha randomly an increment is done to one component (and equivalent decrement is done to another)
 // 5. Repeat until golden brown. lel
-//
-// This will be made into a python endpoint to write the code in Python simpler.
 fn evolve_portfolios(config: EvolutionConfig) -> EvolutionResult {
     // Initialization Phase
     //
@@ -507,7 +504,4 @@ fn compute_portfolio_performance(
     )
 }
 
-#[pymodule]
-fn rusty_evolution(_py: Python, m: &PyModule) -> PyResult<()> {
-    Ok(())
-}
+
