@@ -8,13 +8,45 @@ pub mod sampling {
     #[derive(Debug, Clone, Deserialize, Serialize)]
     #[pyclass]
     pub enum Sampler {
-        FactorModel(usize, usize, usize) //Calibrate on this
+        FactorModel { // Calibrate on this (parameters and whatnot)
+            assets_under_management : usize,
+            number_of_factors: usize,
+            mu_factors: Vec<f64>, // Kept for diagnostic purposes
+            covariance_factors: Vec<f64>, // Kept for diagnostic purposes
+            normal_distribution: MultivariateNormal
+        } 
         #[serde(skip)]
         Normal { // Evolve portfolio on this once you are confident with performance
             normal_distribution: MultivariateNormal,
             periods_to_sample: usize,
         },
         SeriesGAN(usize), // Might never be implemented
+    }
+
+    impl Sampler {
+        fn factor_model(assets_under_management: usize, number_of_factors:usize, periods_to_sample: usize) {
+            let mu_factors : Vec<f64> = vec![.0001; f64];
+            let covariance_factors: Vec<Vec<f64>> = generate_covariance_matrix(number_of_factors);
+
+            let normal_distribution = MultivariateNormal::new(mu_factors, covariance_factors).unwrap();
+
+            FactorModel {
+                assets_under_management,
+                number_of_factors,
+                mu_factors,
+                covariance_factors,
+                normal_distribution
+            }
+        }
+
+        fn normal(means : Vec<f64>, cov: Vec<f64>, periods_to_sample : usize) {
+            let normal_distribution = MultivariateNormal::new(means, cov).unwrap();
+
+            Normal {
+                normal_distribution,
+                periods_to_sample
+            }
+        }
     }
 
     impl Sampler {
