@@ -1,7 +1,7 @@
-# Simulation GAN-TE Carlo
+# Aegis (Formerly Simulation GAN-TE Carlo)
 
 ## Overview
-Simulation GAN-TE Carlo is a Rust-based project that automates the deployment of trading algorithms for cryptocurrencies. 
+Aegis is a Rust-based project that automates the deployment of trading algorithms for cryptocurrencies. 
 
 ## Requirements
 - Rust (latest stable version)
