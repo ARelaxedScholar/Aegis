@@ -29,7 +29,7 @@ pub mod sampling {
     }
 
     impl Sampler {
-        fn factor_model(
+        fn factor_model_synthetic(
             assets_under_management: usize,
             number_of_factors: usize,
             periods_to_sample: usize,
@@ -85,7 +85,11 @@ pub mod sampling {
             unimplemented!()
         }
 
-        fn compute_asset_covariance(loadings : &Vec<f64>, covariance_factors : &Vec<f64>, &Vec<f64>) {
+        fn compute_asset_covariance(
+            loadings: &Vec<f64>,
+            covariance_factors: &Vec<f64>,
+            idiosyncratic_variances: &Vec<f64>,
+        ) {
             unimplemented!()
         }
 
@@ -134,6 +138,21 @@ pub mod sampling {
         pub fn sample_returns(&self) -> Vec<Vec<f64>> {
             let mut rng = thread_rng();
             match self {
+                Sampler::factor_model_synthetic {
+                    assets_under_management,
+                    number_of_factors,
+                    mu_factors,
+                    normal_distribution,
+                    loadings,
+                    mu_factors,
+                    covariance_factors,
+                    mu_assets,
+                    covariance_assets,
+                } => normal_distribution
+                    .sample_iter(&mut rng)
+                    .take(*periods_to_sample)
+                    .map(|row| row.iter().cloned().collect())
+                    .collect::<Vec<_>>(),
                 Sampler::Normal {
                     normal_distribution,
                     periods_to_sample,

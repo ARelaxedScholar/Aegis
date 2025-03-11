@@ -295,7 +295,7 @@ pub fn evolve_portfolios(config: EvolutionConfig) -> EvolutionResult {
         next_generation.extend(offsprings);
         population = next_generation;
     }
-    //
+    // 
     EvolutionResult {
         pareto_fronts: non_dominated_sort(&mut turn_weights_into_portfolios(
             population,
@@ -386,12 +386,14 @@ fn mutate(weights: &mut Vec<f64>, mutation_rate: f64) {
 
 // For conversion to memetic algorithm
 fn proximal_descent() {
-    !unimplemented()
+    unimplemented!()
 }
 
 // For when I complexify the system to deal with more complex
 // constraints than what can be dealt with by clipping/renormalization
-fn proximal_projection(){}
+fn proximal_projection(){
+    unimplemented!()
+}
 
 fn compute_portfolio_performance(
     returns: Vec<Vec<f64>>,
