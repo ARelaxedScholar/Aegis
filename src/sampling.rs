@@ -2,16 +2,19 @@ pub mod sampling {
     use rand::prelude::*;
     use serde::{Deserialize, Serialize};
     use statrs::distribution::MultivariateNormal;
+    use pyo3::pyclass;
 
-    #[pyclass]
+    
     #[derive(Debug, Clone, Deserialize, Serialize)]
+    #[pyclass]
     pub enum Sampler {
+        FactorModel(usize, usize, usize) //Calibrate on this
         #[serde(skip)]
-        Normal {
+        Normal { // Evolve portfolio on this once you are confident with performance
             normal_distribution: MultivariateNormal,
             periods_to_sample: usize,
         },
-        SeriesGAN(usize),
+        SeriesGAN(usize), // Might never be implemented
     }
 
     impl Sampler {
@@ -21,6 +24,11 @@ pub mod sampling {
         fn sample_price_scenario(&self) -> Vec<Vec<f64>> {
             let rng = thread_rng();
             match self {
+                Sampler::FactorModel(number_of_factors, periods_to_sample, assets_under_management) {
+                    let mu_factors = vec![.001; number_of_factors];
+                    let sigma_factors = generate_covariance_matrix(number_of_factors)
+
+                }
                 Sampler::Normal {
                     normal_distribution,
                     periods_to_sample,
