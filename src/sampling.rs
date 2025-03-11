@@ -1,22 +1,27 @@
 pub mod sampling {
+    use pyo3::pyclass;
     use rand::prelude::*;
     use serde::{Deserialize, Serialize};
     use statrs::distribution::MultivariateNormal;
-    use pyo3::pyclass;
 
-    
     #[derive(Debug, Clone, Deserialize, Serialize)]
     #[pyclass]
     pub enum Sampler {
-        FactorModel { // Calibrate on this (parameters and whatnot)
-            assets_under_management : usize,
+        FactorModel {
+            // Calibrate on this (parameters and whatnot)
+            assets_under_management: usize,
             number_of_factors: usize,
-            mu_factors: Vec<f64>, // Kept for diagnostic purposes
-            covariance_factors: Vec<f64>, // Kept for diagnostic purposes
-            normal_distribution: MultivariateNormal
-        } 
+            normal_distribution: MultivariateNormal,
+            // Kept for diagnostic purposes
+            mu_factors: Vec<f64>,
+            covariance_factors: Vec<f64>,
+            mu_assets: Vec<f64>,
+            covariance_assets: Vec<f64>,
+            loadings: Vec<Vec<f64>>,
+        },
         #[serde(skip)]
-        Normal { // Evolve portfolio on this once you are confident with performance
+        Normal {
+            // Evolve portfolio on this once you are confident with performance
             normal_distribution: MultivariateNormal,
             periods_to_sample: usize,
         },
@@ -24,27 +29,72 @@ pub mod sampling {
     }
 
     impl Sampler {
-        fn factor_model(assets_under_management: usize, number_of_factors:usize, periods_to_sample: usize) {
-            let mu_factors : Vec<f64> = vec![.0001; f64];
+        fn factor_model(
+            assets_under_management: usize,
+            number_of_factors: usize,
+            periods_to_sample: usize,
+        ) {
+            let small_returns = 0.001;
+            let mu_factors: Vec<f64> = vec![small_returns; number_of_factors];
             let covariance_factors: Vec<Vec<f64>> = generate_covariance_matrix(number_of_factors);
 
-            let normal_distribution = MultivariateNormal::new(mu_factors, covariance_factors).unwrap();
+            let throwaway = MultivariateNormal::new(mu_factors, covariance_factors).unwrap();
+            let factor_returns: Vec<f64> = throwaway.sample();
+            drop(throwaway); // we no longer need it
+
+            let mut loadings: Vec<Vec<f64>> =
+                vec![vec![0.0; number_of_factors]; assets_under_management];
+            let mut rng = rand::rng();
+            let uniform = Uniform::new(0.5, 1.5);
+            for i in 0..assets_under_management {
+                for j in 0..number_of_factors {
+                    loadings[i][j] = rng.sample(uniform);
+                }
+            }
+
+            // Random variance not explained by factors
+            let mut idiosyncratic_variances: Vec<f64> = vec![0.0; assets_under_management];
+
+            let mu_assets: Vec<f64> = vec![0.0; assets_under_management];
+            for i in 0..assets_under_management {
+                mu_assets[i] = loadings[i]
+                    .iter()
+                    .zip(factor_returns.iter())
+                    .map(|(loading, factor)| loading * factor)
+                    .sum::<f64>();
+            }
+
+            let covariance_assets: Vec<f64> =
+                compute_asset_covariance(&loadings, &covariance_factors, &idiosyncratic_variances);
+            let normal_distribution = MultivariateNormal::new(mu_assets, covariance_assets);
 
             FactorModel {
                 assets_under_management,
                 number_of_factors,
                 mu_factors,
+                normal_distribution,
+                loadings,
+                mu_factors,
                 covariance_factors,
-                normal_distribution
+                mu_assets,
+                covariance_assets,
             }
         }
 
-        fn normal(means : Vec<f64>, cov: Vec<f64>, periods_to_sample : usize) {
+        fn generate_covariance_matrix(number_of_factors: usize) {
+            unimplemented!()
+        }
+
+        fn compute_asset_covariance(loadings : &Vec<f64>, covariance_factors : &Vec<f64>, &Vec<f64>) {
+            unimplemented!()
+        }
+
+        fn normal(means: Vec<f64>, cov: Vec<f64>, periods_to_sample: usize) {
             let normal_distribution = MultivariateNormal::new(means, cov).unwrap();
 
             Normal {
                 normal_distribution,
-                periods_to_sample
+                periods_to_sample,
             }
         }
     }
@@ -56,10 +106,13 @@ pub mod sampling {
         fn sample_price_scenario(&self) -> Vec<Vec<f64>> {
             let rng = thread_rng();
             match self {
-                Sampler::FactorModel(number_of_factors, periods_to_sample, assets_under_management) {
+                Sampler::FactorModel(
+                    number_of_factors,
+                    periods_to_sample,
+                    assets_under_management,
+                ) => {
                     let mu_factors = vec![.001; number_of_factors];
-                    let sigma_factors = generate_covariance_matrix(number_of_factors)
-
+                    let sigma_factors = generate_covariance_matrix(number_of_factors);
                 }
                 Sampler::Normal {
                     normal_distribution,
