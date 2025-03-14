@@ -397,7 +397,8 @@ fn mutate(weights: &mut Vec<f64>, mutation_rate: f64) {
 enum Objective {
     AnnualizedReturns,
     SharpeRatio,
-    Volatility
+    Volatility,
+    MaximizeStrength,
 }
 // For conversion to memetic algorithm
 // Takes a single step in the direction indicated by the gradient (proximal operator)
@@ -409,8 +410,13 @@ fn lamarckian_proximal_descent(returns: Vec<Vec<f64>>,
     time_horizon_in_days: f64,
     step_size: f64,
     objective : Objective,) -> Vec<f64> {
+    
 
-    let portfolio_gradient = compute_portfolio_gradient(returns, weights, money_to_invest, risk_free_rate, time_horizon_in_days, objective)
+    if objective == Objective::MaximizeStrength {
+        let objective = find_dominant_objective(performance_report)
+    }
+
+    let portfolio_gradient = compute_portfolio_gradient(returns, weights, performance_report, money_to_invest, risk_free_rate, time_horizon_in_days, objective)
     
     // gradient step
     let tentative_new_portfolio = weights.iter().zip(portfolio_gradient).map(|w, g| w - step_size*g).collect::<Vec<f64>>();
@@ -450,8 +456,6 @@ objective: Objective,) -> Vec<f64> {
 
             gradient.push(partial_gradient);
         }
-
-
        gradient
     }
 
