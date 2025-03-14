@@ -312,6 +312,13 @@ pub fn evolve_portfolios(config: EvolutionConfig) -> EvolutionResult {
     }
 }
 
+pub fn memetic_evolve_portfolios(config: EvolutionConfig) -> EvolutionResult {
+    // fundamentally will be the same as the standard evolve portfolios
+    // but will add a proximal descent step after mutation and whatnot
+    // but only to the elites to prevent premature convergence
+    unimplemented!()
+}
+
 fn generate_offsprings(
     population: &[Portfolio],
     offspring_count: usize,
