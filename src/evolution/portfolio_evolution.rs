@@ -128,7 +128,7 @@ pub struct EvolutionResult {
 // 4.ii solutions that would be allowed to reproduce using crossover.
 // 4.iii We'd also mutate the allocation stochastically in such away tha randomly an increment is done to one component (and equivalent decrement is done to another)
 // 5. Repeat until golden brown. lel
-pub fn evolve_portfolios(config: EvolutionConfig) -> EvolutionResult {
+pub fn standard_evolve_portfolios(config: EvolutionConfig) -> EvolutionResult {
     // Initialization Phase
     //
     // Common Enough to Alias
@@ -407,11 +407,12 @@ fn lamarckian_proximal_descent(returns: Vec<Vec<f64>>,
     risk_free_rate: f64,
     time_horizon_in_days: f64,
     step_size: f64,
-objective : Objective) -> Vec<f64> {
+    objective : Objective,) -> Vec<f64> {
 
-    let portfolio_gradient = compute_portfolio_gradient(returns, weights, money_to_invest, risk_free_rate, time_horizon_in_days)
+    let portfolio_gradient = compute_portfolio_gradient(returns, weights, money_to_invest, risk_free_rate, time_horizon_in_days, objective)
+    
     // gradient step
-    let tentative_new_portfolio = weights.iter().zip(portfolio_gradient).map(|&w, &g| w - step_size*g).collect::<Vec<f64>>();
+    let tentative_new_portfolio = weights.iter().zip(portfolio_gradient).map(|w, g| w - step_size*g).collect::<Vec<f64>>();
     
     // proximal step returns the new portfolio to use
     proximal_step(&tentative_new_portfolio)
@@ -421,19 +422,38 @@ fn compute_portfolio_gradient(returns: Vec<Vec<f64>>,
     weights: Vec<f64>,
     money_to_invest: f64,
     risk_free_rate: f64,
-    time_horizon_in_days: f64,) {
-        // Compute base performance
-        let base_performance = compute_portfolio_performance(returns, weights, money_to_invest, risk_free_rate, time_horizon_in_days)
+    time_horizon_in_days: f64,
+objective: Objective,) -> Vec<f64> {
         // this is how little we perturb the solution
         let epsilon = 1e-6;
-        let perturbed_portfolio = weights.iter().map(|&w| w + epsilon).collect::<Vec<f64>>();
-        let total = perturbed_portfolio.iter().sum::<f64>();
-        let normalized_perturbed_portfolio = weights.iter().map(|&w| w / total).collect::<Vec<f64>>();
+        let mut gradient = Vec::with_capacity(weights.len());
 
-        let perturbed_performance = compute_portfolio_performance(returns, weights, money_to_invest, risk_free_rate, time_horizon_in_days);
-        // Compute gradient
+        // Compute all the partial derivatives to get the gradient vector
+        for i in 0..weights.len() {
+            // Perturb and renormalize
+            let mut perturbed_weights = weights.clone();
+            perturbed_weights[i] += epsilon;
+            let total = perturbed_weights.iter().sum::<f64>();
+            perturbed_weights = perturbed_weights.into_iter().map(|w| w / total).collect::<Vec<f64>>();
 
-        
+            // Compute the performances for both the base & the perturbed vector
+            let base_performance = compute_portfolio_performance(returns.clone(), weights.clone(), money_to_invest, risk_free_rate, time_horizon_in_days);
+            let perturbed_performance = compute_portfolio_performance(returns.clone(), perturbed_weights, money_to_invest, risk_free_rate, time_horizon_in_days);
+            
+            // This code expects index 1 to be annualize returns, 2 to percent annualized volatility, and 3 to be the sharpe ratio
+            // Fragile code (HOW TO FIX: Make it so the Performance function returns a Struct with named field)
+            // this would break the current evolution loop though so would have to correct that.
+            let partial_gradient = match objective {
+                Objective::AnnualizedReturns => (perturbed_performance.1-base_performance.1 )/epsilon,
+                Objective::Volatility => (perturbed_performance.2-base_performance.2)/epsilon,
+                Objective::SharpeRatio => (perturbed_performance.3-base_performance.3)/epsilon
+            }
+
+            gradient.push(partial_gradient);
+        }
+
+
+       gradient
     }
 
 fn proximal_step()-> Vec<f64> {
