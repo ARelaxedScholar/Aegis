@@ -403,6 +403,7 @@ enum Objective {
 // Takes a single step in the direction indicated by the gradient (proximal operator)
 fn lamarckian_proximal_descent(returns: Vec<Vec<f64>>,
     weights: Vec<f64>,
+    perforance_report: WeightPerformance,
     money_to_invest: f64,
     risk_free_rate: f64,
     time_horizon_in_days: f64,
@@ -420,6 +421,7 @@ fn lamarckian_proximal_descent(returns: Vec<Vec<f64>>,
 
 fn compute_portfolio_gradient(returns: Vec<Vec<f64>>,
     weights: Vec<f64>,
+    base_performance : PortfolioPerformance,
     money_to_invest: f64,
     risk_free_rate: f64,
     time_horizon_in_days: f64,
@@ -436,17 +438,14 @@ objective: Objective,) -> Vec<f64> {
             let total = perturbed_weights.iter().sum::<f64>();
             perturbed_weights = perturbed_weights.into_iter().map(|w| w / total).collect::<Vec<f64>>();
 
-            // Compute the performances for both the base & the perturbed vector
-            let base_performance = compute_portfolio_performance(returns.clone(), weights.clone(), money_to_invest, risk_free_rate, time_horizon_in_days);
+            // Compute the performances for the perturbed vector
             let perturbed_performance = compute_portfolio_performance(returns.clone(), perturbed_weights, money_to_invest, risk_free_rate, time_horizon_in_days);
             
-            // This code expects index 1 to be annualize returns, 2 to percent annualized volatility, and 3 to be the sharpe ratio
-            // Fragile code (HOW TO FIX: Make it so the Performance function returns a Struct with named field)
-            // this would break the current evolution loop though so would have to correct that.
+            // Then compute the partial gradient based on objective!
             let partial_gradient = match objective {
-                Objective::AnnualizedReturns => (perturbed_performance.1-base_performance.1 )/epsilon,
-                Objective::Volatility => (perturbed_performance.2-base_performance.2)/epsilon,
-                Objective::SharpeRatio => (perturbed_performance.3-base_performance.3)/epsilon
+                Objective::AnnualizedReturns => (perturbed_performance.annualized_return-base_performance.annualized_return)/epsilon,
+                Objective::Volatility => (perturbed_performance.percent_annualized_volatility-base_performance.percent_annualized_volatility)/epsilon,
+                Objective::SharpeRatio => (perturbed_performance.sharpe_ratio-base_performance.sharpe_ratio)/epsilon
             }
 
             gradient.push(partial_gradient);
@@ -460,13 +459,19 @@ fn proximal_step()-> Vec<f64> {
     unimplemented!()
 }
 
+struct PortfolioPerformance {  
+    returns: Vec<f64>,
+    annualized_return: f64,
+    percent_annualized_volatility: f64,
+    sharpe_ratio: f64,
+}
 fn compute_portfolio_performance(
     returns: Vec<Vec<f64>>,
     weights: Vec<f64>,
     money_to_invest: f64,
     risk_free_rate: f64,
     time_horizon_in_days: f64, // these are days
-) -> (Vec<f64>, f64, f64, f64) {
+) -> PortfolioPerformance {
     // Returns per row
     let portfolio_returns = returns
         .par_iter()
@@ -510,10 +515,10 @@ fn compute_portfolio_performance(
         // Portfolio return equals the risk-free rate
         0.0
     };
-    (
+    PortfolioPerformance{
         portfolio_returns,
         annualized_return,
         percent_annualized_volatility,
         sharpe_ratio,
-    )
+    }
 }
