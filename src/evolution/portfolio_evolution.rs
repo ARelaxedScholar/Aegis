@@ -391,14 +391,52 @@ fn mutate(weights: &mut Vec<f64>, mutation_rate: f64) {
     weights.iter_mut().for_each(|w| *w /= total);
 }
 
+// For Local Search
+// The idea is to push a solution in the solution it already excels in
+// This should ideally lead to a more diverse Pareto Front, and more interesting solutions
+enum Objective {
+    AnnualizedReturns,
+    SharpeRatio,
+    Volatility
+}
 // For conversion to memetic algorithm
-fn proximal_descent() {
-    unimplemented!()
+// Takes a single step in the direction indicated by the gradient (proximal operator)
+fn lamarckian_proximal_descent(returns: Vec<Vec<f64>>,
+    weights: Vec<f64>,
+    money_to_invest: f64,
+    risk_free_rate: f64,
+    time_horizon_in_days: f64,
+    step_size: f64,
+objective : Objective) -> Vec<f64> {
+
+    let portfolio_gradient = compute_portfolio_gradient(returns, weights, money_to_invest, risk_free_rate, time_horizon_in_days)
+    // gradient step
+    let tentative_new_portfolio = weights.iter().zip(portfolio_gradient).map(|&w, &g| w - step_size*g).collect::<Vec<f64>>();
+    
+    // proximal step returns the new portfolio to use
+    proximal_step(&tentative_new_portfolio)
 }
 
-// For when I complexify the system to deal with more complex
-// constraints than what can be dealt with by clipping/renormalization
-fn proximal_projection(){
+fn compute_portfolio_gradient(returns: Vec<Vec<f64>>,
+    weights: Vec<f64>,
+    money_to_invest: f64,
+    risk_free_rate: f64,
+    time_horizon_in_days: f64,) {
+        // Compute base performance
+        let base_performance = compute_portfolio_performance(returns, weights, money_to_invest, risk_free_rate, time_horizon_in_days)
+        // this is how little we perturb the solution
+        let epsilon = 1e-6;
+        let perturbed_portfolio = weights.iter().map(|&w| w + epsilon).collect::<Vec<f64>>();
+        let total = perturbed_portfolio.iter().sum::<f64>();
+        let normalized_perturbed_portfolio = weights.iter().map(|&w| w / total).collect::<Vec<f64>>();
+
+        let perturbed_performance = compute_portfolio_performance(returns, weights, money_to_invest, risk_free_rate, time_horizon_in_days);
+        // Compute gradient
+
+        
+    }
+
+fn proximal_step()-> Vec<f64> {
     unimplemented!()
 }
 
