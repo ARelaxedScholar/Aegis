@@ -424,7 +424,9 @@ fn lamarckian_proximal_descent(returns: Vec<Vec<f64>>,
     // proximal step returns the new portfolio to use
     proximal_step(&tentative_new_portfolio)
 }
-
+fn proximal_step()-> Vec<f64> {
+    unimplemented!()
+}
 fn compute_portfolio_gradient(returns: Vec<Vec<f64>>,
     weights: Vec<f64>,
     base_performance : PortfolioPerformance,
