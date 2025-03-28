@@ -1,5 +1,5 @@
 use crate::{
-    evolve_portfolios as native_evolve_portfolios, EvolutionConfig, EvolutionResult, Portfolio,
+    evolution::portfolio_evolution::{standard_evolve_portfolios as native_standard_evolve_portfolios, EvolutionConfig, EvolutionResult, Portfolio},
     Sampler,
 };
 use pyo3::prelude::*;
@@ -35,10 +35,10 @@ struct PyEvolutionResult {
 }
 
 #[pyfunction]
-fn evolve_portfolios(config: PyEvolutionConfig) -> PyEvolutionResult {
+fn standard_evolve_portfolios(config: PyEvolutionConfig) -> PyEvolutionResult {
     let config: EvolutionConfig = config.into();
     // call function
-    let evolution_result = native_evolve_portfolios(config);
+    let evolution_result = native_standard_evolve_portfolios(config);
     //
     let result: PyEvolutionResult = evolution_result.into();
     result
@@ -48,7 +48,7 @@ fn evolve_portfolios(config: PyEvolutionConfig) -> PyEvolutionResult {
 fn rusty_evolution(_py: Python, m: &PyModule) -> PyResult<()> {
     m.add_class::<PyEvolutionConfig>()?;
     m.add_class::<PyEvolutionResult>()?;
-    m.add_function(wrap_pyfunction!(evolve_portfolios, m)?)?;
+    m.add_function(wrap_pyfunction!(standard_evolve_portfolios, m)?)?;
     Ok(())
 }
 

@@ -1,3 +1,13 @@
+pub mod portfolio_evolution {
+    use rayon::prelude::*;
+    use crate::{PERTURBATION, NUMBER_OF_OPTIMIZATION_OBJECTIVES};
+    use rand::prelude::*;
+    use rand::distributions::Uniform;
+    use crate::{Portfolio, Sampler};
+    use itertools::izip;
+    use serde::{Serialize, Deserialize};
+
+       
 fn find_pareto_front(portfolios: &[Portfolio]) -> Vec<Portfolio> {
     // Find all the dominated portfolios within batch
     portfolios
