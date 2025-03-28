@@ -222,7 +222,7 @@ pub mod portfolio_evolution {
                             config.risk_free_rate,
                             config.time_horizon_in_days as f64,
                         );
-                        (portfolio.owned(), annualized_return, percent_annualized_volatility, sharpe_ratio)
+                        (portfolio.to_owned(), annualized_return, percent_annualized_volatility, sharpe_ratio)
 
                     })
                     .collect::<Vec<(Vec<f64>, f64, f64, f64)>>();
