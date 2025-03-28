@@ -578,3 +578,136 @@ fn compute_portfolio_performance(
         sharpe_ratio,
     }
 }
+    
+    
+    // TESTS 
+    
+    #[cfg(test)]
+    mod tests {
+        use crate::portfolio::portoflio::Portfolio;
+        use crate::evolution::portfolio_evolution::find_pareto_front;
+    
+        // Helper function to create portfolios with specified return, volatility, and sharpe ratio.
+        fn create_portfolio(average_returns: f64, volatility: f64, sharpe_ratio: f64) -> Portfolio {
+            Portfolio::new(
+                vec![0.25, 0.25, 0.25, 0.25], // Example weights
+                average_returns,
+                volatility,
+                sharpe_ratio,
+            )
+        }
+    
+        #[test]
+        fn test_empty_portfolio_list() {
+            let portfolios: Vec<Portfolio> = vec![];
+            let pareto_front = find_pareto_front(&portfolios);
+            assert_eq!(
+                pareto_front.len(),
+                0,
+                "Pareto front of an empty list should be empty"
+            );
+        }
+    
+        #[test]
+        fn test_single_portfolio() {
+            let portfolios = vec![create_portfolio(0.10, 0.05, 2.0)];
+            let pareto_front = find_pareto_front(&portfolios);
+            assert_eq!(pareto_front.len(), 1, "Pareto front of a single portfolio should contain that portfolio");
+            assert_eq!(
+                pareto_front[0].average_returns,
+                0.10,
+                "The single portfolio's return should be preserved"
+            );
+        }
+    
+        #[test]
+        fn test_clearly_dominated_portfolio() {
+            let portfolios = vec![
+                create_portfolio(0.10, 0.05, 2.0),
+                create_portfolio(0.05, 0.10, 0.5), // Dominated
+            ];
+            let pareto_front = find_pareto_front(&portfolios);
+            assert_eq!(pareto_front.len(), 1, "Pareto front should only contain the non-dominated portfolio");
+            assert_eq!(
+                pareto_front[0].average_returns,
+                0.10,
+                "The non-dominated portfolio's return should be preserved"
+            );
+        }
+    
+        #[test]
+        fn test_no_domination() {
+            // These portfolios are non-dominated because one has higher return but also higher volatility.
+            let portfolios = vec![
+                create_portfolio(0.10, 0.05, 2.0),
+                create_portfolio(0.12, 0.06, 2.0),
+            ];
+            let pareto_front = find_pareto_front(&portfolios);
+            assert_eq!(pareto_front.len(), 2, "Pareto front should contain both portfolios when neither dominates");
+        }
+    
+        #[test]
+        fn test_identical_portfolios() {
+            let portfolios = vec![
+                create_portfolio(0.10, 0.05, 2.0),
+                create_portfolio(0.10, 0.05, 2.0),
+            ];
+            let pareto_front = find_pareto_front(&portfolios);
+            assert_eq!(pareto_front.len(), 2, "Pareto front should contain identical portfolios (to preserve diversity or alternative weights)");
+        }
+    
+        #[test]
+        fn test_multiple_dominated() {
+            let portfolios = vec![
+                create_portfolio(0.10, 0.05, 2.0),  // Non-dominated
+                create_portfolio(0.05, 0.10, 0.5),  // Dominated
+                create_portfolio(0.08, 0.06, 1.0),  // Dominated
+                create_portfolio(0.12, 0.07, 1.71), // Non-dominated
+            ];
+            let pareto_front = find_pareto_front(&portfolios);
+            assert_eq!(pareto_front.len(), 2, "Pareto front should contain only the two non-dominated portfolios");
+        }
+    
+        #[test]
+       fn test_large_number_of_portfolios() {
+           let mut portfolios = Vec::new();
+           for i in 0..100 {
+               portfolios.push(create_portfolio(0.10 + (i as f64 * 0.001), 0.05 + (i as f64 * 0.0001), 2.0));
+           }
+           let pareto_front = find_pareto_front(&portfolios);
+           //In this case, none of the portfolios dominate each other since both return and volatility increase together
+           assert_eq!(pareto_front.len(), 100, "Pareto front should contain all portfolios when none dominate");
+       }
+    
+       #[test]
+        fn test_negative_returns() {
+            let portfolios = vec![
+                create_portfolio(-0.05, 0.1, -0.5),  // Non-dominated
+                create_portfolio(-0.10, 0.2, -0.5), // Dominated
+                create_portfolio(0.02, 0.02, 0.9), // Non Dominated
+            ];
+            let pareto_front = find_pareto_front(&portfolios);
+            assert_eq!(pareto_front.len(), 2, "Pareto front should only contain the two non-dominated portfolios");
+        }
+    
+        #[test]
+        fn test_zero_volatility() {
+            let portfolios = vec![
+                create_portfolio(0.10, 0.00, 2.0),  // Higher Sharpe, non-dominated
+                create_portfolio(0.05, 0.00, 0.5),  // Lower Sharpe, dominated by the first portfolio.
+            ];
+            let pareto_front = find_pareto_front(&portfolios);
+            assert_eq!(pareto_front.len(), 1, "Pareto front should contain only the first portfolio because has the higher Sharpe with same vol");
+        }
+        #[test]
+        fn test_equal_sharpe_ratio() {
+            let portfolios = vec![
+                create_portfolio(0.10, 0.05, 2.0),  // Equal Sharpe
+                create_portfolio(0.06, 0.03, 2.0),  // Equal Sharpe, dominated by the first portfolio due to higher return and lower vol
+            ];
+            let pareto_front = find_pareto_front(&portfolios);
+            assert_eq!(pareto_front.len(), 1, "Pareto front should contain only the undominated portfolio when Sharpe ratios are equal.");
+        }
+    }
+}
+
