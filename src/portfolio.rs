@@ -70,24 +70,22 @@ pub mod portoflio {
         pub fn is_dominated_by(&self, other: &Portfolio) -> bool {
             let self_metrics = self.to_metrics_vector();
             let other_metrics = other.to_metrics_vector();
-            // Dominating implies being better in one area, while not being worse in any other compared
-            // to other. Logically, if we are better than other in at least one we can't be dominated.
-            let better_in_at_least_one = self_metrics
+        
+            // Check if 'other' is at least as good as 'self' in all objectives
+            let at_least_as_good_in_all = self_metrics
                 .iter()
                 .zip(other_metrics.iter())
-                .any(|(&self_metric, &other_metric)| self_metric > other_metric);
-
-            // We check that other_metric is dominating (better than) in at least one category, if that is the case, self cannot
-            // be in the Pareto front and is therefore dominated
-            let dominated = self_metrics
+                .all(|(&self_metric, &other_metric)| other_metric >= self_metric);
+        
+            // Check if 'other' is strictly better than 'self' in at least one objective
+            let strictly_better_in_one = self_metrics
                 .iter()
                 .zip(other_metrics.iter())
-                .any(|(&self_metric, &other_metric)| self_metric < other_metric);
-
-            // If better_in_at_least_one is true, we complement it since we want to return whether we're dominated
-            // If we know we are worse in one metric, we know we are dominated
-            // Both must be true for self to be part of the Pareto Front
-            !better_in_at_least_one && dominated
+                .any(|(&self_metric, &other_metric)| other_metric > self_metric);
+        
+            // 'self' is dominated by 'other' if 'other' is at least as good in all
+            // objectives AND strictly better in at least one objective
+            at_least_as_good_in_all && strictly_better_in_one
         }
     }
 }
