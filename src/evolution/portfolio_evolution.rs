@@ -104,29 +104,29 @@ pub mod portfolio_evolution {
         fronts
     }
     pub struct EvolutionConfig {
-        time_horizon_in_days: usize,
-        generations: usize,
-        population_size: usize,
-        simulations_per_generation: usize,
-        assets_under_management: usize,
-        money_to_invest: f64,
-        risk_free_rate: f64,
-        elitism_rate: f64,
-        mutation_rate: f64,
-        tournament_size: usize,
-        sampler: Sampler,
-        generation_check_interval: usize,
+        pub time_horizon_in_days: usize,
+        pub generations: usize,
+        pub population_size: usize,
+        pub simulations_per_generation: usize,
+        pub assets_under_management: usize,
+        pub money_to_invest: f64,
+        pub risk_free_rate: f64,
+        pub elitism_rate: f64,
+        pub mutation_rate: f64,
+        pub tournament_size: usize,
+        pub sampler: Sampler,
+        pub generation_check_interval: usize,
     }
     
     #[derive(Serialize, Deserialize, Debug)]
     pub struct EvolutionResult {
-        pareto_fronts: Vec<Vec<Portfolio>>,
-        best_average_return_per_generation: Vec<f64>,
-        average_return_per_generation: Vec<f64>,
-        best_average_volatility_per_generation: Vec<f64>,
-        average_volatility_per_generation: Vec<f64>,
-        best_average_sharpe_ratio_per_generation: Vec<f64>,
-        average_sharpe_ratio_per_generation: Vec<f64>,
+        pub pareto_fronts: Vec<Vec<Portfolio>>,
+        pub best_average_return_per_generation: Vec<f64>,
+        pub average_return_per_generation: Vec<f64>,
+        pub best_average_volatility_per_generation: Vec<f64>,
+        pub average_volatility_per_generation: Vec<f64>,
+        pub best_average_sharpe_ratio_per_generation: Vec<f64>,
+        pub average_sharpe_ratio_per_generation: Vec<f64>,
     }
     
     // Algo Logic
@@ -595,7 +595,7 @@ pub mod portfolio_evolution {
     #[cfg(test)]
     mod tests {
         use crate::portfolio::portoflio::Portfolio;
-        use crate::evolution::portfolio_evolution::find_pareto_front;
+        use crate::evolution::portfolio_evolution::portfolio_evolution::find_pareto_front;
     
         // Helper function to create portfolios with specified return, volatility, and sharpe ratio.
         fn create_portfolio(average_returns: f64, volatility: f64, sharpe_ratio: f64) -> Portfolio {
