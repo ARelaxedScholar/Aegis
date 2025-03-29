@@ -692,12 +692,12 @@ pub mod portfolio_evolution {
        #[test]
         fn test_negative_returns() {
             let portfolios = vec![
-                create_portfolio(-0.05, 0.1, -0.5),  // Non-dominated
+                create_portfolio(-0.05, 0.1, -0.5),  // Dominated
                 create_portfolio(-0.10, 0.2, -0.5), // Dominated
                 create_portfolio(0.02, 0.02, 0.9), // Non Dominated
             ];
             let pareto_front = find_pareto_front(&portfolios);
-            assert_eq!(pareto_front.len(), 2, "Pareto front should only contain the two non-dominated portfolios");
+            assert_eq!(pareto_front.len(), 1, "Pareto front should only contain the two non-dominated portfolios");
         }
     
         #[test]
@@ -712,7 +712,7 @@ pub mod portfolio_evolution {
         #[test]
         fn test_equal_sharpe_ratio() {
             let portfolios = vec![
-                create_portfolio(0.10, 0.05, 2.0),  // Equal Sharpe
+                create_portfolio(0.10, 0.02, 2.0),  // Equal Sharpe
                 create_portfolio(0.06, 0.03, 2.0),  // Equal Sharpe, dominated by the first portfolio due to higher return and lower vol
             ];
             let pareto_front = find_pareto_front(&portfolios);
