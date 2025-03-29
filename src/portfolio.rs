@@ -70,22 +70,23 @@ pub mod portoflio {
         pub fn is_dominated_by(&self, other: &Portfolio) -> bool {
             let self_metrics = self.to_metrics_vector();
             let other_metrics = other.to_metrics_vector();
+
         
             // Check if 'other' is at least as good as 'self' in all objectives
-            let at_least_as_good_in_all = self_metrics
+            let other_is_at_least_as_good_in_all = self_metrics
                 .iter()
                 .zip(other_metrics.iter())
                 .all(|(&self_metric, &other_metric)| other_metric >= self_metric);
         
             // Check if 'other' is strictly better than 'self' in at least one objective
-            let strictly_better_in_one = self_metrics
+            let other_is_strictly_better_in_one = self_metrics
                 .iter()
                 .zip(other_metrics.iter())
                 .any(|(&self_metric, &other_metric)| other_metric > self_metric);
         
             // 'self' is dominated by 'other' if 'other' is at least as good in all
             // objectives AND strictly better in at least one objective
-            at_least_as_good_in_all && strictly_better_in_one
+            other_is_at_least_as_good_in_all && other_is_strictly_better_in_one
         }
     }
 }
