@@ -1,3 +1,4 @@
+#![allow(warnings)]
 // IMPORTS
 use core::f64;
 use rayon::prelude::*;

@@ -1,6 +1,7 @@
 use crate::{
-    evolution::portfolio_evolution::{standard_evolve_portfolios as native_standard_evolve_portfolios, EvolutionConfig, EvolutionResult, Portfolio},
+    evolution::portfolio_evolution::portfolio_evolution::{standard_evolve_portfolios as native_standard_evolve_portfolios, EvolutionConfig, EvolutionResult},
     Sampler,
+    Portfolio,
 };
 use pyo3::prelude::*;
 use pyo3::types::PyType;
