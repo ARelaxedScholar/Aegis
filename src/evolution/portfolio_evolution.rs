@@ -9,7 +9,7 @@ pub mod portfolio_evolution {
 
        
     fn find_pareto_front(portfolios: &[Portfolio]) -> Vec<Portfolio> {
-        // Find all the dominated portfolios within batch
+        // Find all the non-dominated portfolios within batch
         portfolios
             .par_iter()
             .enumerate()
