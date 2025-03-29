@@ -288,13 +288,13 @@ pub mod portfolio_evolution {
                 });
     
                 for portfolio in front.iter() {
-                    if population.len() >= elite_population_size {
+                    if next_generation.len() >= elite_population_size {
                         break;
                     }
                     next_generation.push(portfolio.weights.clone());
                 }
     
-                if population.len() >= elite_population_size {
+                if next_generation.len() >= elite_population_size {
                     break;
                 }
             }
@@ -425,12 +425,12 @@ pub mod portfolio_evolution {
         step_size: f64,
         objective : Objective,) -> Vec<f64> {
         
-    
-        if objective == Objective::MaximizeStrength {
-            let objective = find_dominant_objective(&performance_report);
+        let mut objective_for_descent = objective;
+        if objective_for_descent == Objective::MaximizeStrength {
+            objective_for_descent = find_dominant_objective(&performance_report);
         }
     
-        let portfolio_gradient = compute_portfolio_gradient(returns, &weights, performance_report, money_to_invest, risk_free_rate, time_horizon_in_days, objective);
+        let portfolio_gradient = compute_portfolio_gradient(returns, &weights, performance_report, money_to_invest, risk_free_rate, time_horizon_in_days, objective_for_descent);
         
         // gradient step
         let tentative_new_portfolio = weights.iter().zip(portfolio_gradient).map(|(w, g)| w - step_size*g).collect::<Vec<f64>>();
