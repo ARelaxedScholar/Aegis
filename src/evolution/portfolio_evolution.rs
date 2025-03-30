@@ -438,9 +438,22 @@ pub mod portfolio_evolution {
         // proximal step returns the new portfolio to use
         proximal_step(&tentative_new_portfolio)
     }
-    
+
+    const HIGH_SHARPE_THRESHOLD : f64 = 1.5;
+    const LOW_VOLATILITY_THRESHOLD: f64 = 0.10;
+
+    // Based on a heuristic, since computing the dominant would be somewhat arbitrary anyways
     fn find_dominant_objective(performance_report:&PortfolioPerformance) -> Objective {
-        unimplemented!()
+        if performance_report.sharpe_ratio >= HIGH_SHARPE_THRESHOLD {
+        // If the Sharpe Ratio is pretty high, favor that.
+            Objective::SharpeRatio
+        } else if performance_report.percent_annualized_volatility <= LOW_VOLATILITY_THRESHOLD {
+        // If the volatility is quite low, let's favor that.
+            Objective::Volatility
+        } else {
+        // If both Sharpe and Volatility are not significatively low, might as well maximize returns
+            Objective::AnnualizedReturns
+        }
     }
     // 
     fn proximal_step(weights: &Vec<f64>)-> Vec<f64> {
