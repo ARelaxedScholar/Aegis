@@ -187,37 +187,6 @@ pub mod sampling {
     }
 
     impl Sampler {
-        /// Honestly, only the superverised normal needs the price scenarios
-        /// and for theoretical reasons this is gibberish, so it will be revamped later.
-        /// But for now we leave it as this.
-        fn sample_price_scenario(&self) -> Vec<Vec<f64>> {
-            let rng = thread_rng();
-            match self {
-                Sampler::FactorModel {
-                    number_of_factors,
-                    periods_to_sample,
-                    assets_under_management,
-                    normal_distribution,
-                    mu_factors,
-                    covariance_factors,
-                    mu_assets,
-                    covariance_assets,
-                    loadings,
-                    idiosyncratic_variances,
-                } => {
-                    vec![vec![1.]]
-                }
-                Sampler::Normal {
-                    normal_distribution,
-                    periods_to_sample,
-                } => vec![vec![1.]], // SHOULDN'T BE CALLED TRUTHFULLY,
-
-                Sampler::SeriesGAN(periods_to_sample) => {
-                    // NOT IMPLEMENTED (WILL WRITE IT SO THAT THERE"S A MODEL THAT WAS TRAINED TO GENERATE THESE, NOT A PRIORITY)
-                    vec![vec![1.]]
-                }
-            }
-        }
         /// sample_returns
         /// Takes method of Sampler object
         ///
