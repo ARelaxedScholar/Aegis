@@ -1,5 +1,8 @@
 pub mod portfolio_evolution {
-    use crate::{Portfolio, Sampler};
+    use std::cmp::Ordering;
+    use std::f64::EPSILON;
+
+    use crate::{Portfolio, Sampler, FLOAT_COMPARISON_EPSILON};
     use crate::{NUMBER_OF_OPTIMIZATION_OBJECTIVES, PERTURBATION};
     use itertools::izip;
     use rand::distributions::Uniform;
@@ -7,20 +10,46 @@ pub mod portfolio_evolution {
     use rayon::prelude::*;
     use serde::{Deserialize, Serialize};
 
-    fn find_pareto_front(portfolios: &[Portfolio]) -> Vec<Portfolio> {
-        // Find all the non-dominated portfolios within batch
+    /// Finds the indices of non-dominated portfolios within a slice.
+    ///
+    /// A portfolio is non-dominated if no other portfolio in the slice
+    /// strictly dominates it across all objectives (using the `is_dominated_by` method).
+    ///
+    /// # Arguments
+    /// * `portfolios`: A slice of `Portfolio` structs to analyze.
+    ///
+    /// # Returns
+    /// A `Vec<usize>` containing the indices of the non-dominated portfolios
+    /// relative to the input `portfolios` slice.
+    ///
+    /// # Complexity
+    /// Currently O(N^2) due to the nested comparison, but parallelized.
+    /// Consider more efficient algorithms for large N.
+    fn find_non_dominated_indices(portfolios: &[Portfolio]) -> Vec<usize> {
+        // Handle empty input immediately
+        if portfolios.is_empty() {
+            return vec![];
+        }
+
         portfolios
-            .par_iter()
-            .enumerate()
+            .par_iter() // Iterate over portfolios in parallel
+            .enumerate() // Get (index `i`, portfolio `&portfolio_a`)
             .filter(|(i, portfolio_a)| {
-                // A portfolio is non-dominated iff no other portfolio dominates it
-                !portfolios
-                    .iter()
+                // Check if *any* other portfolio_b dominates portfolio_a
+                // The inner loop checks all other portfolios (j != i)
+                let is_dominated = portfolios
+                    .iter() // We use sequential iterator here since outer loop is already parallelized
                     .enumerate()
-                    .any(|(j, portfolio_b)| *i != j && portfolio_a.is_dominated_by(portfolio_b))
+                    .any(|(j, portfolio_b)| {
+                        // Ensure we don't compare a portfolio to itself
+                        // and check for domination using the Portfolio method
+                        *i != j && portfolio_a.is_dominated_by(portfolio_b)
+                    });
+                // The `filter` keeps items where `is_dominated` is false
+                !is_dominated
             })
-            .map(|(_, portfolio)| portfolio.clone())
-            .collect()
+            .map(|(i, _portfolio_a)| i) // We only need the index `i` of the non-dominated portfolio
+            .collect() // Collect the indices into a Vec<usize>
     }
 
     fn calculate_and_update_crowding_distance(pareto_front: &mut Vec<Portfolio>) {
@@ -74,34 +103,57 @@ pub mod portfolio_evolution {
         }
     }
 
-    fn non_dominated_sort(portfolios: &mut [Portfolio]) -> Vec<Vec<Portfolio>> {
+    fn build_pareto_fronts(portfolios: &[Portfolio]) -> Vec<Vec<Portfolio>> {
         let mut fronts: Vec<Vec<Portfolio>> = Vec::new();
-        let mut remaining_portfolios = portfolios.to_vec();
+        // Clone the input initially to work with an owned Vec we can modify
+        let mut remaining_portfolios: Vec<Portfolio> = portfolios.to_vec(); // Initial clone needed to allow `retain`
 
-        let mut current_front = 1;
+        let mut current_front_rank = 1;
         while !remaining_portfolios.is_empty() {
-            // Find the Pareto front & Update Portfolio
-            let mut pareto_front = find_pareto_front(&remaining_portfolios);
+            // Find the *indices* of the non-dominated portfolios in the current remaining set
+            let non_dominated_indices = find_non_dominated_indices(&remaining_portfolios);
+
+            if non_dominated_indices.is_empty() {
+                // Should not happen if there are remaining portfolios unless there's an issue
+                // or potentially if all remaining portfolios are identical and dominate each other somehow?
+                // like even for the final front, non_dominated_indices would just contain all the portfolios since they are all mutually non-dominated.
+                eprintln!("Warning: Found no non-dominated portfolios among remaining {} portfolios. Breaking sort.", remaining_portfolios.len());
+                // We treat those weird portfolios as a single final front
+                if !remaining_portfolios.is_empty() {
+                    fronts.push(remaining_portfolios.clone()); // Add remaining as a last front
+                }
+                break;
+            }
+
+            // Create the Pareto front Vec<Portfolio> by cloning *only* the non-dominated ones
+            let mut pareto_front: Vec<Portfolio> = non_dominated_indices
+                .iter()
+                .map(|&idx| remaining_portfolios[idx].clone())
+                .collect();
+
+            // Update rank for portfolios in this front
             pareto_front.iter_mut().for_each(|portfolio| {
-                portfolio.rank = Some(current_front);
+                portfolio.rank = Some(current_front_rank);
             });
 
-            // Modifies the crowding distances in-place
+            // Calculate crowding distance for this front
             calculate_and_update_crowding_distance(&mut pareto_front);
 
-            // Then add it to the fronts list
-            fronts.push(pareto_front.clone());
-
-            // Remove the portfolios in the current front
+            // Get the IDs of the portfolios added to this front
+            // We need IDs because indices change after `retain`
             let pareto_ids: std::collections::HashSet<_> =
                 pareto_front.iter().map(|portfolio| portfolio.id).collect();
 
-            // Remaining Portfolios
+            // Add the calculated front to the list of fronts
+            fronts.push(pareto_front); // `pareto_front` is already Vec<Portfolio>
+
+            // Remove the portfolios that were just added to the front from the remaining list
             remaining_portfolios.retain(|portfolio| !pareto_ids.contains(&portfolio.id));
-            current_front += 1;
+
+            current_front_rank += 1;
         }
 
-        fronts
+        fronts // Return the calculated fronts
     }
 
     fn initialize_population(
@@ -131,22 +183,23 @@ pub mod portfolio_evolution {
     }
 
     fn turn_weights_into_portfolios(
-        population: Vec<Vec<f64>>,
-        simulation_average_returns: Vec<f64>,
-        simulation_average_volatilities: Vec<f64>,
-        simulation_average_sharpe_ratios: Vec<f64>,
+        population: &[Vec<f64>],
+        simulation_average_returns: &[f64],
+        simulation_average_volatilities: &[f64],
+        simulation_average_sharpe_ratios: &[f64],
     ) -> Vec<Portfolio> {
-        let portfolio_simulation_averages: Vec<(Vec<f64>, f64, f64, f64)> = izip!(
+        let portfolio_simulation_averages: Vec<(&Vec<f64>, &f64, &f64, &f64)> = izip!(
             population,
             simulation_average_returns,
             simulation_average_volatilities,
             simulation_average_sharpe_ratios
         )
         .collect();
+
         portfolio_simulation_averages
             .par_iter()
-            .map(|(portfolio, ave_ret, ave_vol, ave_sharpe)| {
-                Portfolio::new(portfolio.to_vec(), *ave_ret, *ave_vol, *ave_sharpe)
+            .map(|(portfolio, &ave_ret, &ave_vol, &ave_sharpe)| {
+                Portfolio::new(portfolio.to_vec(), ave_ret, ave_vol, ave_sharpe)
             })
             .collect()
     }
@@ -169,6 +222,8 @@ pub mod portfolio_evolution {
 
     #[derive(Serialize, Deserialize, Debug, Clone)]
     pub struct MemeticParams {
+        /// objective to use during the proximal step
+        pub local_objective: Objective,
         pub proximal_descent_steps: usize,
         pub proximal_descent_step_size: f64,
         pub high_sharpe_threshold: f64,
@@ -177,12 +232,11 @@ pub mod portfolio_evolution {
 
     #[derive(Serialize, Deserialize, Debug, Clone)]
     pub struct MemeticEvolutionConfig {
-        #[serde(flatten)]  
+        #[serde(flatten)]
         pub base: StandardEvolutionConfig,
         pub memetic: MemeticParams,
     }
 
-    
     /// Contains summary statistics for the final population after evolution.
     #[derive(Serialize, Deserialize, Debug, Clone)]
     pub struct FinalPopulationSummary {
@@ -278,38 +332,56 @@ pub mod portfolio_evolution {
 
             // --- Create Portfolio Structs (uses per-portfolio averages) ---
             let mut portfolio_structs: Vec<Portfolio> = turn_weights_into_portfolios(
-                population,
-                simulation_average_returns,
-                simulation_average_volatilities,
-                simulation_average_sharpe_ratios,
+                &population,
+                &simulation_average_returns,
+                &simulation_average_volatilities,
+                &simulation_average_sharpe_ratios,
             );
-
-            let mut fronts = non_dominated_sort(&mut portfolio_structs);
+            
+            let mut fronts = build_pareto_fronts(&portfolio_structs);
+            let breeding_pool: Vec<&Portfolio> = fronts.iter().flatten().collect();
             let mut next_generation: Vec<Vec<f64>> = Vec::new();
 
             // Adding Elites (Exploitation)
-            for front in fronts.iter_mut() {
-                // Sort array before proceeding!
-                front.sort_by(|portfolio_a, portfolio_b| {
-                    portfolio_a
-                        .partial_cmp(portfolio_b)
-                        .unwrap_or(std::cmp::Ordering::Equal)
-                });
-
-                for portfolio in front.iter() {
-                    if next_generation.len() >= elite_population_size {
-                        break;
-                    }
-                    next_generation.push(portfolio.weights.clone());
-                }
-
+            for front in fronts.iter() { // Iterate through fronts (already ordered by rank: F1, F2, ...)
                 if next_generation.len() >= elite_population_size {
+                    // Stop if we already have enough elites
+                    break;
+                }
+        
+                if next_generation.len() + front.len() <= elite_population_size {
+                    // If the entire current front fits within the remaining elite slots, add them all.
+                    for portfolio in front.iter() {
+                        next_generation.push(portfolio.weights.clone());
+                    }
+                } else {
+                    // If the entire front doesn't fit, we need to take the best ones based on crowding distance.
+                    let needed = elite_population_size - next_generation.len();
+        
+                    // Sort *this specific front* by crowding distance (descending).
+                    // Cloning the front is necessary to sort it without affecting the original `fronts` structure.
+                    let mut sorted_partial_front = front.clone();
+                    sorted_partial_front.sort_by(|a, b| {
+                        // Crowding distance should be Some(_) after calculate_and_update_crowding_distance runs.
+                        // Use unwrap_or just in case, assigning a low value if None (shouldn't happen).
+                        // Sort descending: b compared to a. Handle Inf correctly (comes first).
+                        let dist_a = a.crowding_distance.unwrap_or(f64::NEG_INFINITY);
+                        let dist_b = b.crowding_distance.unwrap_or(f64::NEG_INFINITY);
+                        dist_b.total_cmp(&dist_a) // total_cmp is safer for floats
+                    });
+        
+                    // Take the top 'needed' portfolios from the sorted front.
+                    for portfolio in sorted_partial_front.iter().take(needed) {
+                        next_generation.push(portfolio.weights.clone());
+                    }
+        
+                    // Elites are now full, break the outer loop over fronts.
                     break;
                 }
             }
 
             let offsprings = generate_offsprings(
-                &fronts.into_iter().flatten().collect::<Vec<Portfolio>>(),
+                &breeding_pool,
                 offspring_count,
                 config.mutation_rate,
                 config.tournament_size,
@@ -323,10 +395,10 @@ pub mod portfolio_evolution {
 
         // Create final portfolio structs using the final weights and *final* evaluation results
         let mut final_portfolio_structs = turn_weights_into_portfolios(
-            population,
-            final_eval_result.average_returns,
-            final_eval_result.average_volatilities,
-            final_eval_result.average_sharpe_ratios,
+            &population,
+            &final_eval_result.average_returns,
+            &final_eval_result.average_volatilities,
+            &final_eval_result.average_sharpe_ratios,
         );
 
         // Create the final summary object
@@ -341,7 +413,7 @@ pub mod portfolio_evolution {
 
         // --- Prepare and return the EvolutionResult ---
         EvolutionResult {
-            pareto_fronts: non_dominated_sort(&mut final_portfolio_structs),
+            pareto_fronts: build_pareto_fronts(&mut final_portfolio_structs),
             // Generation history vectors were filled during the loop
             best_average_return_per_generation,
             average_return_per_generation,
@@ -416,19 +488,19 @@ pub mod portfolio_evolution {
 
             // --- Create Portfolio Structs (uses per-portfolio averages) ---
             let mut portfolio_structs: Vec<Portfolio> = turn_weights_into_portfolios(
-                population,
-                simulation_average_returns,
-                simulation_average_volatilities,
-                simulation_average_sharpe_ratios,
+                &population,
+                &simulation_average_returns,
+                &simulation_average_volatilities,
+                &simulation_average_sharpe_ratios,
             );
 
             // Non-dominated sort modifies ranks and crowding distances in place
-            let fronts = non_dominated_sort(&mut portfolio_structs);
+            let fronts = build_pareto_fronts(&portfolio_structs);
 
             // --- The Memetic Part (Local Search) ---
             let mut next_generation_elites: Vec<Vec<f64>> =
                 Vec::with_capacity(elite_population_size);
-            let mut individuals_for_breeding = portfolio_structs.clone(); // Keep original population for breeding pool
+            let breeding_pool: Vec<&Portfolio> = fronts.iter().flatten().collect(); // Keep original population for breeding pool
 
             let mut elite_candidates: Vec<Portfolio> = Vec::new();
             for front in fronts.iter() {
@@ -465,26 +537,25 @@ pub mod portfolio_evolution {
                         percent_annualized_volatility: elite_portfolio.volatility,
                         sharpe_ratio: elite_portfolio.sharpe_ratio,
                     };
-
+                    let objective_for_descent = match config.memetic.local_objective {
+                        Objective::MaximizeStrength => {
+                            find_dominant_objective(&base_performance, high_sharpe, low_vol)
+                        }
+                        other => other,
+                    };
                     for _ in 0..proximal_steps {
-                        // Determine objective: Use find_dominant_objective or fix it (e.g., Sharpe)
-                        // Let's use the heuristic here as an example
-                        let objective_for_descent =
-                            find_dominant_objective(&base_performance, high_sharpe, low_vol);
-                        // OR: let objective_for_descent = Objective::SharpeRatio;
-
                         // Recalculate performance needed *inside* gradient computation
                         let current_performance_for_gradient = compute_portfolio_performance(
-                            last_scenario_returns.clone(), // Need the returns for gradient calculation
-                            current_weights.clone(),
+                            &last_scenario_returns, // Need the returns for gradient calculation
+                            &current_weights,
                             config.base.money_to_invest,
                             config.base.risk_free_rate,
                             config.base.time_horizon_in_days as f64,
                         );
 
                         current_weights = lamarckian_proximal_descent(
-                            last_scenario_returns.clone(), // Pass the sampled returns
-                            current_weights,
+                            &last_scenario_returns, // Pass the sampled returns
+                            &current_weights,
                             current_performance_for_gradient, // Pass performance for gradient calculation
                             config.base.money_to_invest,
                             config.base.risk_free_rate,
@@ -502,7 +573,7 @@ pub mod portfolio_evolution {
             // --- Generate Offspring (using original population before elite improvement) ---
             let offspring_count = population_size - next_generation_elites.len();
             let offspring_weights = generate_offsprings(
-                &individuals_for_breeding, // Use the full sorted population as potential parents
+                &breeding_pool, // Use the full sorted population as potential parents
                 offspring_count,
                 config.base.mutation_rate,
                 config.base.tournament_size,
@@ -541,10 +612,10 @@ pub mod portfolio_evolution {
 
         // Create final portfolio structs using the final weights and *final* evaluation results
         let mut final_portfolio_structs = turn_weights_into_portfolios(
-            population,
-            final_eval_result.average_returns,
-            final_eval_result.average_volatilities,
-            final_eval_result.average_sharpe_ratios,
+            &population,
+            &final_eval_result.average_returns,
+            &final_eval_result.average_volatilities,
+            &final_eval_result.average_sharpe_ratios,
         );
 
         // Create the final summary object
@@ -559,7 +630,7 @@ pub mod portfolio_evolution {
 
         // --- Prepare and return the EvolutionResult ---
         EvolutionResult {
-            pareto_fronts: non_dominated_sort(&mut final_portfolio_structs),
+            pareto_fronts: build_pareto_fronts(&mut final_portfolio_structs),
             // Generation history vectors were filled during the loop
             best_average_return_per_generation,
             average_return_per_generation,
@@ -588,7 +659,7 @@ pub mod portfolio_evolution {
     }
 
     fn generate_offsprings(
-        population: &[Portfolio],
+        population: &[&Portfolio],
         offspring_count: usize,
         mutation_rate: f64,
         k: usize,
@@ -608,19 +679,41 @@ pub mod portfolio_evolution {
         offsprings
     }
 
-    fn select_parents(population: &[Portfolio], k: usize) -> (Vec<f64>, Vec<f64>) {
+    fn select_parents(population: &[&Portfolio], k: usize) -> (Vec<f64>, Vec<f64>) {
         let parent_1 = tournament_selection(population, 2);
         let parent_2 = tournament_selection(population, 2);
 
         (parent_1.to_owned(), parent_2.to_owned())
     }
 
-    fn tournament_selection(population: &[Portfolio], k: usize) -> Vec<f64> {
+    fn tournament_selection(population_refs: &[&Portfolio], k: usize) -> Vec<f64> {
         let mut rng = thread_rng();
-        let mut k_portfolios: Vec<Portfolio> =
-            population.choose_multiple(&mut rng, k).cloned().collect();
-        k_portfolios.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Less));
-        k_portfolios[0].weights.clone()
+    
+        // 1. Choose k references randomly from the population slice.
+        // choose_multiple returns an iterator yielding references to the elements of the slice.
+        // Since the slice contains `&Portfolio`, the iterator yields `&&Portfolio`.
+        let contestants: Vec<&&Portfolio> = population_refs.choose_multiple(&mut rng, k).collect();
+    
+        // Handle the case where k is 0 or larger than population size (choose_multiple might return fewer)
+        if contestants.is_empty() {
+            // This shouldn't happen if k > 0 and population is not empty,
+            panic!("Tournament selection failed: No contestants selected (k={}, population_size={})", k, population_refs.len());
+        }
+    
+        // 2. Find the best contestant among the selected references.
+        // We iterate through the contestants (&&Portfolio) and find the minimum
+        // based on the Portfolio's comparison logic (rank then crowding distance).
+        // We need to dereference twice (&&Portfolio -> &Portfolio) to use partial_cmp.
+        let winner: &&Portfolio = contestants.into_iter().min_by(|&&a, &&b| {
+            // Compare the &Portfolio references using the implemented PartialOrd
+            a.partial_cmp(b)
+             .unwrap_or(Ordering::Equal) // Treat non-comparable as equal for sorting
+                                        // Or Ordering::Less/Greater if a default is needed
+        }).expect("Failed to find a winner in tournament selection"); // Should not happen if contestants is not empty
+    
+        // 3. Clone the weights of the winning portfolio.
+        // Dereference the winner (&&Portfolio -> &Portfolio) and clone its weights.
+        winner.weights.clone()
     }
 
     fn crossover(parent_1: &Vec<f64>, parent_2: &Vec<f64>) -> Vec<f64> {
@@ -662,7 +755,7 @@ pub mod portfolio_evolution {
     // For Local Search
     // The idea is to push a solution in the solution it already excels in
     // This should ideally lead to a more diverse Pareto Front, and more interesting solutions
-    #[derive(PartialEq)]
+    #[derive(PartialEq, Debug, Clone, Serialize, Deserialize, Copy)]
     enum Objective {
         AnnualizedReturns,
         SharpeRatio,
@@ -672,8 +765,8 @@ pub mod portfolio_evolution {
     // For conversion to memetic algorithm
     // Takes a single step in the direction indicated by the gradient (proximal operator)
     fn lamarckian_proximal_descent(
-        returns: Vec<Vec<f64>>,
-        weights: Vec<f64>,
+        returns: &[Vec<f64>],
+        weights: &[f64],
         performance_report: PortfolioPerformance,
         money_to_invest: f64,
         risk_free_rate: f64,
@@ -693,7 +786,7 @@ pub mod portfolio_evolution {
         }
 
         let portfolio_gradient = compute_portfolio_gradient(
-            returns,
+            &returns,
             &weights,
             performance_report,
             money_to_invest,
@@ -763,8 +856,6 @@ pub mod portfolio_evolution {
         }
     }
 
-
-
     /// Holds the results of evaluating a population over multiple simulations,
     /// including both per-portfolio averages and population-wide summary statistics.
     #[derive(Debug, Clone)]
@@ -796,8 +887,6 @@ pub mod portfolio_evolution {
         pub population_average_sharpe: f64,
     }
 
-  
-
     /// Evaluates the performance of a given population of portfolios over multiple simulations.
     ///
     /// Calculates per-portfolio average metrics and population-wide summary statistics.
@@ -820,7 +909,7 @@ pub mod portfolio_evolution {
                 average_sharpe_ratios: vec![],
                 last_scenario_returns: vec![],
                 best_return: f64::NEG_INFINITY,
-                population_average_return: 0.0, // Or f64::NAN? Or handle upstream?
+                population_average_return: 0.0, 
                 best_volatility: f64::INFINITY,
                 population_average_volatility: 0.0,
                 best_sharpe: f64::NEG_INFINITY,
@@ -847,8 +936,8 @@ pub mod portfolio_evolution {
                 .par_iter()
                 .map(|portfolio_weights| {
                     let performance = compute_portfolio_performance(
-                        scenario_returns.clone(),
-                        portfolio_weights.clone(),
+                        &scenario_returns,
+                        portfolio_weights,
                         config.money_to_invest,
                         config.risk_free_rate,
                         config.time_horizon_in_days as f64,
@@ -925,8 +1014,8 @@ pub mod portfolio_evolution {
     }
 
     fn compute_portfolio_gradient(
-        returns: Vec<Vec<f64>>,
-        weights: &Vec<f64>,
+        returns: &[Vec<f64>],
+        weights: &[f64],
         base_performance: PortfolioPerformance,
         money_to_invest: f64,
         risk_free_rate: f64,
@@ -939,19 +1028,20 @@ pub mod portfolio_evolution {
 
         // Compute all the partial derivatives to get the gradient vector
         for i in 0..weights.len() {
-            // Perturb and renormalize
-            let mut perturbed_weights = weights.clone();
+            // Perturb gand renormalize
+            let mut perturbed_weights = weights.to_vec();
             perturbed_weights[i] += epsilon;
-            let total = perturbed_weights.iter().sum::<f64>();
+            let total = 1.0 + epsilon; // the weights are assumed to be valid
+
             perturbed_weights = perturbed_weights
-                .into_iter()
-                .map(|w| w / total)
+                .iter()
+                .map(|w| *w / total)
                 .collect::<Vec<f64>>();
 
             // Compute the performances for the perturbed vector
             let perturbed_performance = compute_portfolio_performance(
-                returns.clone(),
-                perturbed_weights,
+                returns,
+                &perturbed_weights,
                 money_to_invest,
                 risk_free_rate,
                 time_horizon_in_days,
@@ -977,49 +1067,101 @@ pub mod portfolio_evolution {
                     );
                 }
             };
-
-            gradient.push(partial_gradient);
+            if partial_gradient.is_nan() {
+                panic!(
+                    "NaN encountered in gradient calculation! \
+                     Index: {}, Objective: {:?}, Epsilon: {}, \
+                     Base Perf: {:?}, Perturbed Perf: {:?}, Weights: {:?}",
+                    i,
+                    objective,
+                    epsilon,
+                    base_performance,
+                    perturbed_performance,
+                    weights // Log relevant context
+                );
+            } else if !partial_gradient.is_finite() {
+                // For robustness (we still log this)
+                eprintln!(
+                    "Warning: Non-finite gradient ({}) encountered. \
+                     Index: {}, Objective: {:?}, Epsilon: {}, \
+                     Base Perf: {:?}, Perturbed Perf: {:?}, Weights: {:?}. \
+                     Substituting gradient component with 0.0.",
+                    partial_gradient,
+                    i,
+                    objective,
+                    epsilon,
+                    base_performance,
+                    perturbed_performance,
+                    weights
+                );
+                gradient.push(0.0); // Substitute 0.0 for Inf/-Inf
+            } else {
+                // Finite gradient is ideal (? I want more money)
+                gradient.push(partial_gradient);
+            }
         }
         gradient
     }
 
+    #[derive(Debug, Clone)]
     struct PortfolioPerformance {
         portfolio_returns: Vec<f64>,
         annualized_return: f64,
         percent_annualized_volatility: f64,
         sharpe_ratio: f64,
     }
+
     fn compute_portfolio_performance(
-        returns: Vec<Vec<f64>>,
-        weights: Vec<f64>,
+        returns: &[Vec<f64>],
+        weights: &[f64],
         money_to_invest: f64,
         risk_free_rate: f64,
-        time_horizon_in_days: f64, // these are days
+        time_horizon_in_days: f64,
     ) -> PortfolioPerformance {
-        // Returns per row
+        // --- Edge Case Checks ---
+        // Check 1: Invalid Configuration for Time/Money (Panic)
+        if time_horizon_in_days.abs() < FLOAT_COMPARISON_EPSILON {
+            panic!("Configuration Error: time_horizon_in_days cannot be zero.");
+        }
+        if money_to_invest.abs() < FLOAT_COMPARISON_EPSILON {
+            panic!("Configuration Error: money_to_invest cannot be zero.");
+        }
+
+        let number_of_periods = returns.len() as f64;
+
+        // Check 2: Insufficient Return Periods for Volatility/Sharpe (Panic)
+        if number_of_periods < 2.0 {
+            panic!(
+            "Configuration Error: Cannot compute volatility or Sharpe ratio with fewer than 2 return periods (found {}). \
+             Check 'periods_to_sample' in Sampler configuration.",
+             returns.len()
+         );
+        }
+
+        // --- Main Calculation (Now guaranteed N >= 2) ---
         let portfolio_returns = returns
             .par_iter()
             .map(|row| {
-                row.into_par_iter()
+                row.par_iter()
                     .zip(weights.par_iter())
                     .map(|(log_return, weight)| {
-                        ((log_return.exp() - 1.0) * weight) * money_to_invest
+                        ((log_return.exp() - 1.0) * *weight) * money_to_invest
                     })
                     .sum::<f64>()
             })
             .collect::<Vec<f64>>();
 
-        let average_return =
-            portfolio_returns.iter().sum::<f64>() / (portfolio_returns.len() as f64);
-        let volatility = (portfolio_returns
+        let average_return = portfolio_returns.iter().sum::<f64>() / number_of_periods;
+
+        // Calculate variance (N-1 in denominator is now safe)
+        let variance = portfolio_returns
             .iter()
             .map(|ret| (ret - average_return).powi(2))
             .sum::<f64>()
-            / (portfolio_returns.len() as f64 - 1.0))
-            .sqrt();
+            / (number_of_periods - 1.0);
+        let volatility = variance.sqrt(); // Standard deviation (dollar terms)
 
         // Annualizing!
-        let number_of_periods = portfolio_returns.len() as f64;
         let time_horizon_in_years = time_horizon_in_days / 365.0;
         let periods_per_year = number_of_periods / time_horizon_in_years;
 
@@ -1027,21 +1169,20 @@ pub mod portfolio_evolution {
         let annualized_volatility = volatility * periods_per_year.sqrt();
         let percent_annualized_volatility = annualized_volatility / money_to_invest;
 
-        // Adjust risk-free rate to the provided time horizon
-        let risk_free_return = money_to_invest * risk_free_rate;
+        // Adjust risk-free rate
+        let risk_free_return = money_to_invest * risk_free_rate; // Annual dollar risk-free
 
-        let sharpe_ratio = if volatility != 0.0 {
+        // Calculate Sharpe
+        let sharpe_ratio = if annualized_volatility.abs() >= FLOAT_COMPARISON_EPSILON {
+            // CASE 1: Volatility is significantly NON-ZERO
             (annualized_return - risk_free_return) / annualized_volatility
-        } else if annualized_return > risk_free_return {
-            // Portfolio offers a guaranteed return above the risk-free rate
-            f64::MAX // Or a large constant like 1e6
-        } else if annualized_return < risk_free_return {
-            // Portfolio offers a guaranteed return below the risk-free rate
-            f64::MIN // Or a large negative constant like -1e6
         } else {
-            // Portfolio return equals the risk-free rate
-            0.0
+            // CASE 2: Volatility IS effectively ZERO
+            // Throwaway cause that's a useless portfolio (just cap it at 0. sharpe tadum-tsh)
+                0.0
+            
         };
+
         PortfolioPerformance {
             portfolio_returns,
             annualized_return,
@@ -1054,155 +1195,280 @@ pub mod portfolio_evolution {
 
     #[cfg(test)]
     mod tests {
-        use crate::evolution::portfolio_evolution::portfolio_evolution::find_pareto_front;
-        use crate::portfolio::portoflio::Portfolio;
+        use statrs::distribution::MultivariateNormal;
 
-        // Helper function to create portfolios with specified return, volatility, and sharpe ratio.
+        use super::*;
+        use std::f64::EPSILON;
+
+        // Helper: create a dummy Portfolio.
+        // Adjust this function if your Portfolio::new signature is different.
         fn create_portfolio(average_returns: f64, volatility: f64, sharpe_ratio: f64) -> Portfolio {
+            // Assume Portfolio::new takes (weights, average_returns, volatility, sharpe_ratio)
             Portfolio::new(
-                vec![0.25, 0.25, 0.25, 0.25], // Example weights
+                vec![0.25, 0.25, 0.25, 0.25],
                 average_returns,
                 volatility,
                 sharpe_ratio,
             )
         }
 
+        // Test initialize_population: ensure it errors on zero and produces normalized vectors.
         #[test]
-        fn test_empty_portfolio_list() {
-            let portfolios: Vec<Portfolio> = vec![];
-            let pareto_front = find_pareto_front(&portfolios);
-            assert_eq!(
-                pareto_front.len(),
-                0,
-                "Pareto front of an empty list should be empty"
+        fn test_initialize_population_errors_and_normalization() {
+            assert!(
+                initialize_population(0, 4).is_err(),
+                "Population size of 0 should error"
             );
-        }
+            assert!(
+                initialize_population(10, 0).is_err(),
+                "Assets under management of 0 should error"
+            );
 
-        #[test]
-        fn test_single_portfolio() {
-            let portfolios = vec![create_portfolio(0.10, 0.05, 2.0)];
-            let pareto_front = find_pareto_front(&portfolios);
-            assert_eq!(
-                pareto_front.len(),
-                1,
-                "Pareto front of a single portfolio should contain that portfolio"
-            );
-            assert_eq!(
-                pareto_front[0].average_returns, 0.10,
-                "The single portfolio's return should be preserved"
-            );
-        }
-
-        #[test]
-        fn test_clearly_dominated_portfolio() {
-            let portfolios = vec![
-                create_portfolio(0.10, 0.05, 2.0),
-                create_portfolio(0.05, 0.10, 0.5), // Dominated
-            ];
-            let pareto_front = find_pareto_front(&portfolios);
-            assert_eq!(
-                pareto_front.len(),
-                1,
-                "Pareto front should only contain the non-dominated portfolio"
-            );
-            assert_eq!(
-                pareto_front[0].average_returns, 0.10,
-                "The non-dominated portfolio's return should be preserved"
-            );
-        }
-
-        #[test]
-        fn test_no_domination() {
-            // These portfolios are non-dominated because one has higher return but also higher volatility.
-            let portfolios = vec![
-                create_portfolio(0.10, 0.05, 2.0),
-                create_portfolio(0.12, 0.06, 2.0),
-            ];
-            let pareto_front = find_pareto_front(&portfolios);
-            assert_eq!(
-                pareto_front.len(),
-                2,
-                "Pareto front should contain both portfolios when neither dominates"
-            );
-        }
-
-        #[test]
-        fn test_identical_portfolios() {
-            let portfolios = vec![
-                create_portfolio(0.10, 0.05, 2.0),
-                create_portfolio(0.10, 0.05, 2.0),
-            ];
-            let pareto_front = find_pareto_front(&portfolios);
-            assert_eq!(pareto_front.len(), 2, "Pareto front should contain identical portfolios (to preserve diversity or alternative weights)");
-        }
-
-        #[test]
-        fn test_multiple_dominated() {
-            let portfolios = vec![
-                create_portfolio(0.10, 0.05, 2.0),  // Non-dominated
-                create_portfolio(0.05, 0.10, 0.5),  // Dominated
-                create_portfolio(0.08, 0.06, 1.0),  // Dominated
-                create_portfolio(0.12, 0.07, 1.71), // Non-dominated
-            ];
-            let pareto_front = find_pareto_front(&portfolios);
-            assert_eq!(
-                pareto_front.len(),
-                2,
-                "Pareto front should contain only the two non-dominated portfolios"
-            );
-        }
-
-        #[test]
-        fn test_large_number_of_portfolios() {
-            let mut portfolios = Vec::new();
-            for i in 0..100 {
-                portfolios.push(create_portfolio(
-                    0.10 + (i as f64 * 0.001),
-                    0.05 + (i as f64 * 0.0001),
-                    2.0,
-                ));
+            let population = initialize_population(5, 4).unwrap();
+            for weights in population.iter() {
+                let sum: f64 = weights.iter().sum();
+                assert!(
+                    (sum - 1.0).abs() < FLOAT_COMPARISON_EPSILON,
+                    "Weights should sum to 1. Got {}",
+                    sum
+                );
             }
-            let pareto_front = find_pareto_front(&portfolios);
-            //In this case, none of the portfolios dominate each other since both return and volatility increase together
+        }
+
+        // Test find_non_dominated_indices for empty input and single portfolio.
+        #[test]
+        fn test_find_non_dominated_indices() {
+            let empty: Vec<Portfolio> = vec![];
+            let indices = find_non_dominated_indices(&empty);
+            assert!(
+                indices.is_empty(),
+                "Empty input should return empty indices"
+            );
+
+            let p1 = create_portfolio(0.10, 0.05, 2.0);
+            let indices = find_non_dominated_indices(&[p1.clone()]);
+            assert_eq!(indices, vec![0], "Single portfolio should be non-dominated");
+
+            // Test with two portfolios where one dominates the other.
+            let p2 = create_portfolio(0.05, 0.10, 1.0); // Clearly dominated by p1
+            let indices = find_non_dominated_indices(&[p1.clone(), p2.clone()]);
             assert_eq!(
-                pareto_front.len(),
-                100,
-                "Pareto front should contain all portfolios when none dominate"
+                indices,
+                vec![0],
+                "Only the dominating portfolio should remain"
+            );
+        }
+
+        // Test build_pareto_fronts: Check that the front is built correctly.
+        #[test]
+        fn test_build_pareto_fronts() {
+            let p1 = create_portfolio(0.10, 0.05, 2.0); // Non-dominated
+            let p2 = create_portfolio(0.05, 0.10, 1.0); // Dominated by p1
+            let p3 = create_portfolio(0.12, 0.06, 2.5); // Non-dominated
+            let portfolios = vec![p1.clone(), p2.clone(), p3.clone()];
+            let fronts = build_pareto_fronts(&portfolios);
+            // Expect front 1 to contain p1 and p3 (order may vary)
+            assert_eq!(
+                fronts[0].len(),
+                2,
+                "Pareto front should have two portfolios"
+            );
+            // Check that the dominated one (p2) is not in the first front.
+            for portfolio in fronts[0].iter() {
+                assert_ne!(
+                    portfolio.average_returns, p2.average_returns,
+                    "Dominated portfolio should be removed"
+                );
+            }
+        }
+
+        // Test proximal_step: ensure projection onto the simplex.
+        #[test]
+        fn test_proximal_step_projection() {
+            let unsorted = vec![0.5, 0.2, 0.3, -0.1];
+            let projected = proximal_step(&unsorted);
+            for &w in projected.iter() {
+                assert!(w >= 0.0, "All weights must be non-negative");
+            }
+            let sum: f64 = projected.iter().sum();
+            assert!(
+                (sum - 1.0).abs() < FLOAT_COMPARISON_EPSILON,
+                "Projected weights must sum to 1, got {}",
+                sum
+            );
+        }
+
+        // Test compute_portfolio_performance with zero returns.
+        #[test]
+        fn test_compute_portfolio_performance_zero_returns() {
+            // 10 periods, 4 assets, all returns zero.
+            let returns = vec![vec![0.0; 4]; 10];
+            let weights = vec![0.25, 0.25, 0.25, 0.25];
+            let performance =
+                compute_portfolio_performance(&returns, &weights, 10000.0, 0.02, 365.0);
+
+            assert!(
+                (performance.annualized_return).abs() < FLOAT_COMPARISON_EPSILON,
+                "Annualized return should be 0, but got {}",
+                performance.annualized_return
+            );
+            assert!(
+                (performance.percent_annualized_volatility).abs() < FLOAT_COMPARISON_EPSILON,
+                "Volatility should be 0, but got {}",
+                performance.percent_annualized_volatility
+            );
+            assert_eq!(
+                performance.sharpe_ratio, 0.0,
+                "Sharpe ratio should be 0 when returns equal risk-free, but got {}",
+                performance.sharpe_ratio
+            );
+        }
+
+        // Test compute_portfolio_performance panics with zero time horizon.
+        #[test]
+        #[should_panic(expected = "time_horizon_in_days cannot be zero")]
+        fn test_compute_portfolio_performance_zero_time() {
+            let returns = vec![vec![0.0; 4]; 10];
+            let weights = vec![0.25, 0.25, 0.25, 0.25];
+            let _ = compute_portfolio_performance(&returns, &weights, 10000.0, 0.02, 0.0);
+        }
+
+        // Test compute_portfolio_performance panics with zero money to invest.
+        #[test]
+        #[should_panic(expected = "money_to_invest cannot be zero")]
+        fn test_compute_portfolio_performance_zero_money() {
+            let returns = vec![vec![0.0; 4]; 10];
+            let weights = vec![0.25, 0.25, 0.25, 0.25];
+            let _ = compute_portfolio_performance(&returns, &weights, 0.0, 0.02, 365.0);
+        }
+
+        // Test compute_portfolio_gradient: Ensure no NaNs or Infs.
+        #[test]
+        fn test_compute_portfolio_gradient_no_nan() {
+            let returns = vec![vec![0.01; 4]; 10];
+            let weights = vec![0.25, 0.25, 0.25, 0.25];
+            let base_perf = compute_portfolio_performance(&returns, &weights, 10000.0, 0.02, 365.0);
+            let grad = compute_portfolio_gradient(
+                &returns,
+                &weights,
+                base_perf,
+                10000.0,
+                0.02,
+                365.0,
+                Objective::AnnualizedReturns,
+            );
+            for g in grad.iter() {
+                assert!(g.is_finite(), "Gradient component must be finite");
+                assert!(!g.is_nan(), "Gradient component must not be NaN");
+            }
+        }
+
+        // Integration test for standard_evolve_portfolios.
+        // This is more of a smoke test than a strict functional test.
+        #[test]
+        fn test_standard_evolve_portfolios_smoke() {
+            // Use a dummy Sampler with constant returns. We use the Normal variant.
+            let dummy_normal = MultivariateNormal::new(
+                vec![0.01, 0.01, 0.01, 0.01],
+                vec![
+                    0.001, 0.0, 0.0, 0.0, 0.0, 0.001, 0.0, 0.0, 0.0, 0.0, 0.001, 0.0, 0.0, 0.0,
+                    0.0, 0.001,
+                ],
+            )
+            .unwrap();
+            let config = StandardEvolutionConfig {
+                time_horizon_in_days: 365,
+                generations: 3,
+                population_size: 10,
+                simulations_per_generation: 3,
+                assets_under_management: 4,
+                money_to_invest: 10000.0,
+                risk_free_rate: 0.02,
+                elitism_rate: 0.2,
+                mutation_rate: 0.05,
+                tournament_size: 2,
+                sampler: Sampler::Normal {
+                    normal_distribution: dummy_normal,
+                    periods_to_sample: 10,
+                },
+                generation_check_interval: 1,
+            };
+            let result = standard_evolve_portfolios(config);
+            // Check that we have a final Pareto front.
+            assert!(
+                !result.pareto_fronts.is_empty(),
+                "There should be at least one Pareto front"
+            );
+            // Check that the final summary has finite values.
+            assert!(
+                result.final_summary.best_return.is_finite(),
+                "Best return should be finite"
             );
         }
 
         #[test]
-        fn test_negative_returns() {
-            let portfolios = vec![
-                create_portfolio(-0.05, 0.1, -0.5), // Dominated
-                create_portfolio(-0.10, 0.2, -0.5), // Dominated
-                create_portfolio(0.02, 0.02, 0.9),  // Non Dominated
-            ];
-            let pareto_front = find_pareto_front(&portfolios);
-            assert_eq!(
-                pareto_front.len(),
-                1,
-                "Pareto front should only contain the two non-dominated portfolios"
-            );
-        }
+    fn test_memetic_evolve_portfolios_smoke() {
+        // Create a dummy Normal sampler with constant returns.
+        let dummy_normal = MultivariateNormal::new(
+            vec![0.01, 0.01, 0.01, 0.01],
+            vec![
+                0.001, 0.0,   0.0,   0.0,
+                0.0,   0.001, 0.0,   0.0,
+                0.0,   0.0,   0.001, 0.0,
+                0.0,   0.0,   0.0,   0.001,
+            ]
+        ).unwrap();
 
-        #[test]
-        fn test_zero_volatility() {
-            let portfolios = vec![
-                create_portfolio(0.10, 0.00, 2.0), // Higher Sharpe, non-dominated
-                create_portfolio(0.05, 0.00, 0.5), // Lower Sharpe, dominated by the first portfolio.
-            ];
-            let pareto_front = find_pareto_front(&portfolios);
-            assert_eq!(pareto_front.len(), 1, "Pareto front should contain only the first portfolio because has the higher Sharpe with same vol");
-        }
-        #[test]
-        fn test_equal_sharpe_ratio() {
-            let portfolios = vec![
-                create_portfolio(0.10, 0.02, 2.0), // Equal Sharpe
-                create_portfolio(0.06, 0.03, 2.0), // Equal Sharpe, dominated by the first portfolio due to higher return and lower vol
-            ];
-            let pareto_front = find_pareto_front(&portfolios);
-            assert_eq!(pareto_front.len(), 1, "Pareto front should contain only the undominated portfolio when Sharpe ratios are equal.");
-        }
+        // Build a base evolution configuration.
+        let base_config = StandardEvolutionConfig {
+            time_horizon_in_days: 365,
+            generations: 3,
+            population_size: 10,
+            simulations_per_generation: 3,
+            assets_under_management: 4,
+            money_to_invest: 10000.0,
+            risk_free_rate: 0.02,
+            elitism_rate: 0.2,
+            mutation_rate: 0.05,
+            tournament_size: 2,
+            sampler: Sampler::Normal {
+                normal_distribution: dummy_normal,
+                periods_to_sample: 10,
+            },
+            generation_check_interval: 1,
+        };
+
+        // Define memetic parameters.
+        let memetic_params = MemeticParams {
+            local_objective: Objective::SharpeRatio,
+            proximal_descent_steps: 3,
+            proximal_descent_step_size: 0.001,
+            high_sharpe_threshold: 2.0,
+            low_volatility_threshold: 0.01,
+        };
+
+        // Combine into a memetic evolution configuration.
+        let config = MemeticEvolutionConfig {
+            base: base_config,
+            memetic: memetic_params,
+        };
+
+        // Run the memetic evolution.
+        let result = memetic_evolve_portfolios(config);
+
+        // Check that we have at least one Pareto front.
+        assert!(!result.pareto_fronts.is_empty(), "Expected at least one Pareto front");
+
+        // Check that final summary values are finite.
+        assert!(result.final_summary.best_return.is_finite(), "Final best return should be finite");
+        assert!(result.final_summary.population_average_return.is_finite(), "Population average return should be finite");
+        assert!(result.final_summary.best_volatility.is_finite(), "Final best volatility should be finite");
+        assert!(result.final_summary.population_average_volatility.is_finite(), "Population average volatility should be finite");
+        assert!(result.final_summary.best_sharpe.is_finite(), "Final best Sharpe ratio should be finite");
+        assert!(result.final_summary.population_average_sharpe.is_finite(), "Population average Sharpe ratio should be finite");
+
+        
+        println!("Final Population Summary: {:?}", result.final_summary);
+    }
     }
 }
