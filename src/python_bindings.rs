@@ -1,7 +1,9 @@
 use crate::{
-    evolution::portfolio_evolution::portfolio_evolution::{standard_evolve_portfolios as native_standard_evolve_portfolios, EvolutionConfig, EvolutionResult},
-    Sampler,
-    Portfolio,
+    evolution::portfolio_evolution::portfolio_evolution::{
+        standard_evolve_portfolios as native_standard_evolve_portfolios, EvolutionResult,
+        StandardEvolutionConfig,
+    },
+    Portfolio, Sampler,
 };
 use pyo3::prelude::*;
 use pyo3::types::PyType;
@@ -37,7 +39,7 @@ struct PyEvolutionResult {
 
 #[pyfunction]
 fn standard_evolve_portfolios(config: PyEvolutionConfig) -> PyEvolutionResult {
-    let config: EvolutionConfig = config.into();
+    let config: StandardEvolutionConfig = config.into();
     // call function
     let evolution_result = native_standard_evolve_portfolios(config);
     //
@@ -54,9 +56,9 @@ fn rusty_evolution(_py: Python, m: &PyModule) -> PyResult<()> {
 }
 
 //  Conversion Functions
-impl From<PyEvolutionConfig> for EvolutionConfig {
+impl From<PyEvolutionConfig> for StandardEvolutionConfig {
     fn from(py_config: PyEvolutionConfig) -> Self {
-        EvolutionConfig {
+        StandardEvolutionConfig {
             time_horizon_in_days: py_config.time_horizon_in_days,
             generations: py_config.generations,
             population_size: py_config.population_size,
