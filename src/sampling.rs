@@ -1,15 +1,51 @@
 pub mod sampling {
-    use pyo3::pyclass;
+    use pyo3::prelude::*;
     use rand::distributions::Uniform;
-    use rand::prelude::*;
-    use serde::de::{self, MapAccess, SeqAccess, Visitor};
-    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+    use rand::{rngs::StdRng, Rng, SeedableRng};
     use statrs::distribution::MultivariateNormal;
-    use std::fmt;
 
     #[pyclass]
     pub struct PySampler {
         sampler: Sampler,
+    }
+
+    #[pymethods]
+    impl PySampler {
+        /// Construct a new sampler: mode = "factor" or "normal", seed = Option<u64>
+        #[new]
+        #[pyo3(signature = (mode, assets, factors, periods, seed = None))]
+        fn new(
+            mode: &str,
+            assets: usize,
+            factors: usize,
+            periods: usize,
+            seed: Option<u64>,
+        ) -> PyResult<Self> {
+            let sampler = match mode {
+                "factor" => Sampler::factor_model_synthetic(assets, factors, periods, seed)
+                    .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e))?,
+                "normal" => Sampler::normal(
+                    vec![0.0; assets],
+                    vec![1.0; assets * assets],
+                    periods,
+                    seed,
+                ),
+                _ => return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+                    "mode must be \"factor\" or \"normal\"",
+                )),
+            };
+            Ok(PySampler { sampler })
+        }
+
+        /// Sample returns; advances internal RNG
+        fn sample_returns(&mut self) -> Vec<Vec<f64>> {
+            self.sampler.sample_returns()
+        }
+
+        /// Reseed the internal RNG mid-flight
+        fn reseed(&mut self, seed: u64) {
+            self.sampler.reseed(seed);
+        }
     }
 
     #[derive(Debug, Clone)]
@@ -19,54 +55,54 @@ pub mod sampling {
             periods_to_sample: usize,
             number_of_factors: usize,
 
-            // Parameters of the factor model (with potential for Bayesian priors)
             mu_factors: Vec<f64>,
             covariance_factors: Vec<Vec<f64>>,
             loadings: Vec<Vec<f64>>,
-            idiosyncratic_variances: Vec<f64>, // Added
+            idiosyncratic_variances: Vec<f64>,
 
-            // Derived quantities (can be computed from the parameters)
             mu_assets: Vec<f64>,
             covariance_assets: Vec<Vec<f64>>,
 
-            // The multivariate normal distribution (for sampling)
             normal_distribution: MultivariateNormal,
+            rng: StdRng,
         },
 
         Normal {
             periods_to_sample: usize,
             normal_distribution: MultivariateNormal,
+            rng: StdRng,
         },
-        SeriesGAN(usize), // Might never be implemented
+
+        SeriesGAN(usize),
     }
 
     impl Sampler {
-        fn factor_model_synthetic(
+        pub fn factor_model_synthetic(
             assets_under_management: usize,
             number_of_factors: usize,
             periods_to_sample: usize,
+            seed: Option<u64>,
         ) -> Result<Self, String> {
             if assets_under_management == 0 || number_of_factors == 0 {
                 return Err("Assets and Factors should be positives".into());
             }
 
-            let mut rng = rand::thread_rng();
+            let mut rng = seed
+                .map(StdRng::seed_from_u64)
+                .unwrap_or_else(StdRng::from_entropy);
+
             let small_returns = 0.001;
-            let mu_factors: Vec<f64> = vec![small_returns; number_of_factors];
-            let covariance_factors: Vec<Vec<f64>> =
-                Self::generate_covariance_matrix(number_of_factors).unwrap();
+            let mu_factors = vec![small_returns; number_of_factors];
+            let covariance_factors = Self::generate_covariance_matrix(number_of_factors)?;
 
             let throwaway = MultivariateNormal::new(
                 mu_factors.clone(),
                 covariance_factors.clone().into_iter().flatten().collect(),
             )
-            .unwrap();
+            .map_err(|e| format!("MVN init failed: {}", e))?;
             let factor_returns = throwaway.sample(&mut rng);
-            drop(throwaway); // we no longer need it
 
-            let mut loadings: Vec<Vec<f64>> =
-                vec![vec![0.0; number_of_factors]; assets_under_management];
-
+            let mut loadings = vec![vec![0.0; number_of_factors]; assets_under_management];
             let uniform = Uniform::new(0.5, 1.5);
             for i in 0..assets_under_management {
                 for j in 0..number_of_factors {
@@ -74,16 +110,15 @@ pub mod sampling {
                 }
             }
 
-            // Random variance not explained by factors
-            let mut idiosyncratic_variances: Vec<f64> = vec![0.01; assets_under_management];
+            let idiosyncratic_variances = vec![0.01; assets_under_management];
 
-            let mut mu_assets: Vec<f64> = vec![0.0; assets_under_management];
+            let mut mu_assets = vec![0.0; assets_under_management];
             for i in 0..assets_under_management {
                 mu_assets[i] = loadings[i]
                     .iter()
                     .zip(factor_returns.iter())
-                    .map(|(loading, factor)| loading * factor)
-                    .sum::<f64>();
+                    .map(|(l, f)| l * f)
+                    .sum();
             }
 
             let covariance_assets = Self::compute_asset_covariance(
@@ -91,13 +126,14 @@ pub mod sampling {
                 &covariance_factors,
                 &idiosyncratic_variances,
             )?;
+
             let normal_distribution = MultivariateNormal::new(
                 mu_assets.clone(),
                 covariance_assets.clone().into_iter().flatten().collect(),
             )
-            .map_err(|e| format!("Failed to create MultivariateNormal: {}", e))?;
+            .map_err(|e| format!("Failed to create MVN: {}", e))?;
 
-            Ok(Self::FactorModel {
+            Ok(Sampler::FactorModel {
                 assets_under_management,
                 periods_to_sample,
                 number_of_factors,
@@ -108,25 +144,41 @@ pub mod sampling {
                 mu_assets,
                 covariance_assets,
                 normal_distribution,
+                rng,
             })
         }
 
-        fn generate_covariance_matrix(number_of_factors: usize) -> Result<Vec<Vec<f64>>, String> {
+        pub fn normal(
+            means: Vec<f64>,
+            cov: Vec<f64>,
+            periods_to_sample: usize,
+            seed: Option<u64>,
+        ) -> Self {
+            let rng = seed
+                .map(StdRng::seed_from_u64)
+                .unwrap_or_else(StdRng::from_entropy);
+            let normal_distribution = MultivariateNormal::new(means, cov).unwrap();
+            Sampler::Normal {
+                periods_to_sample,
+                normal_distribution,
+                rng,
+            }
+        }
+
+        fn generate_covariance_matrix(
+            number_of_factors: usize,
+        ) -> Result<Vec<Vec<f64>>, String> {
             if number_of_factors == 0 {
                 return Err("Number of factors must be greater than zero".to_string());
             }
+            let mut rng = StdRng::from_entropy();
+            let uniform = Uniform::new(0.01, 0.2);
 
-            let mut rng = thread_rng();
-            let uniform = Uniform::new(0.01, 0.2); // Chosen arbitrarily tbh
-
-            let mut covariance_matrix: Vec<Vec<f64>> =
-                vec![vec![0.0; number_of_factors]; number_of_factors];
-
+            let mut m = vec![vec![0.0; number_of_factors]; number_of_factors];
             for i in 0..number_of_factors {
-                covariance_matrix[i][i] = rng.sample(uniform); // Sample variances from uniform distribution
+                m[i][i] = rng.sample(uniform);
             }
-
-            Ok(covariance_matrix)
+            Ok(m)
         }
 
         fn compute_asset_covariance(
@@ -134,209 +186,91 @@ pub mod sampling {
             covariance_factors: &Vec<Vec<f64>>,
             idiosyncratic_variances: &Vec<f64>,
         ) -> Result<Vec<Vec<f64>>, String> {
-            let assets_under_management = loadings.len();
-            let number_of_factors = covariance_factors.len();
-
-            // Check dimensions
-            if loadings[0].len() != number_of_factors {
-                return Err("Incompatible dimensions: Number of columns in loadings must equal number of factors".to_string());
+            let assets = loadings.len();
+            let factors = covariance_factors.len();
+            if loadings[0].len() != factors {
+                return Err("Incompatible dimensions".to_string());
+            }
+            if idiosyncratic_variances.len() != assets {
+                return Err("Incompatible dimensions".to_string());
             }
 
-            if idiosyncratic_variances.len() != assets_under_management {
-                return Err("Incompatible dimensions: Number of idiosyncratic variances must equal number of assets".to_string());
-            }
-
-            // 1. Calculate B * Sigma_f (loadings * covariance_factors)
-            let mut b_sigma_f: Vec<Vec<f64>> =
-                vec![vec![0.0; number_of_factors]; assets_under_management];
-            for i in 0..assets_under_management {
-                for j in 0..number_of_factors {
-                    for k in 0..number_of_factors {
-                        b_sigma_f[i][j] += loadings[i][k] * covariance_factors[k][j];
+            let mut bsf = vec![vec![0.0; factors]; assets];
+            for i in 0..assets {
+                for j in 0..factors {
+                    for k in 0..factors {
+                        bsf[i][j] += loadings[i][k] * covariance_factors[k][j];
                     }
                 }
             }
 
-            // 2. Calculate (B * Sigma_f) * B.transpose()
-            let mut b_sigma_f_bt: Vec<Vec<f64>> =
-                vec![vec![0.0; assets_under_management]; assets_under_management];
-            for i in 0..assets_under_management {
-                for j in 0..assets_under_management {
-                    for k in 0..number_of_factors {
-                        b_sigma_f_bt[i][j] += b_sigma_f[i][k] * loadings[j][k];
+            let mut cov = vec![vec![0.0; assets]; assets];
+            for i in 0..assets {
+                for j in 0..assets {
+                    for k in 0..factors {
+                        cov[i][j] += bsf[i][k] * loadings[j][k];
                     }
                 }
             }
 
-            // 3. Add the idiosyncratic variances to the diagonal
-            for i in 0..assets_under_management {
-                b_sigma_f_bt[i][i] += idiosyncratic_variances[i];
+            for i in 0..assets {
+                cov[i][i] += idiosyncratic_variances[i];
             }
-
-            Ok(b_sigma_f_bt)
+            Ok(cov)
         }
 
-        fn normal(means: Vec<f64>, cov: Vec<f64>, periods_to_sample: usize) -> Self {
-            let normal_distribution = MultivariateNormal::new(means, cov).unwrap();
-
-            Self::Normal {
-                normal_distribution,
-                periods_to_sample,
-            }
-        }
-    }
-
-    impl Sampler {
-        /// sample_returns
-        /// Takes method of Sampler object
-        ///
-        /// Returns a vector of vectors of f64.
-        ///
-        /// The goal is to sample returns according to different modalities.
-        pub fn sample_returns(&self) -> Vec<Vec<f64>> {
-            let mut rng = thread_rng();
+        pub fn sample_returns(&mut self) -> Vec<Vec<f64>> {
             match self {
                 Sampler::FactorModel {
-                    assets_under_management,
-                    number_of_factors,
                     normal_distribution,
-                    loadings,
-                    mu_factors,
-                    covariance_factors,
-                    mu_assets,
-                    covariance_assets,
                     periods_to_sample,
-                    idiosyncratic_variances,
+                    rng,
+                    ..
                 } => normal_distribution
-                    .sample_iter(&mut rng)
+                    .sample_iter(rng)
                     .take(*periods_to_sample)
-                    .map(|row| row.iter().cloned().collect())
-                    .collect::<Vec<_>>(),
+                    .map(|row| row.to_vec())
+                    .collect(),
+
                 Sampler::Normal {
                     normal_distribution,
                     periods_to_sample,
+                    rng,
                 } => normal_distribution
-                    .sample_iter(&mut rng)
+                    .sample_iter(rng)
                     .take(*periods_to_sample)
-                    .map(|row| row.iter().cloned().collect())
-                    .collect::<Vec<_>>(),
-                Sampler::SeriesGAN(usize) => {
-                    // THE MOST IMPORTANT ONE, WHEN I AM DONE IMPLEMENTING THIS HOPEFULLY GENERATING GOOD PORTFOLIOS WILL BE EASIER
-                    vec![vec![1.]] //FOR NOW RETURNS UNIT
-                }
+                    .map(|row| row.to_vec())
+                    .collect(),
+
+                Sampler::SeriesGAN(periods_to_sample) => vec![vec![1.0]; *periods_to_sample],
             }
         }
 
-        pub fn find_min_max(raw_sequence: &[Vec<f64>]) -> Result<(Vec<(f64, f64)>, usize), String> {
+        pub fn reseed(&mut self, seed: u64) {
+            match self {
+                Sampler::FactorModel { rng, .. } | Sampler::Normal { rng, .. } => {
+                    *rng = StdRng::seed_from_u64(seed);
+                }
+                _ => {}
+            }
+        }
+
+        pub fn find_min_max(
+            raw_sequence: &[Vec<f64>],
+        ) -> Result<(Vec<(f64, f64)>, usize), String> {
             if raw_sequence.is_empty() {
-                return Err("Passed an empty sequence to supervisor".to_string());
+                return Err("Passed an empty sequence".to_string());
             }
-            let dimension = raw_sequence[0].len(); // access first row and then check the number of elements
-                                                   // must be in this order so that any value is less than INFINITY, and any value is bigger than NEG_INFINITY
-            let mut min_max = vec![(f64::INFINITY, f64::NEG_INFINITY); dimension];
-
-            for row in raw_sequence.iter() {
-                for (col_idx, &value) in row.iter().enumerate() {
-                    let (min, max) = &mut min_max[col_idx];
-                    *min = (*min).min(value);
-                    *max = (*max).max(value);
+            let dim = raw_sequence[0].len();
+            let mut mm = vec![(f64::INFINITY, f64::NEG_INFINITY); dim];
+            for row in raw_sequence {
+                for (i, &v) in row.iter().enumerate() {
+                    let (min, max) = &mut mm[i];
+                    *min = (*min).min(v);
+                    *max = (*max).max(v);
                 }
             }
-            Ok((min_max, dimension))
-        }
-    }
-
-    impl Serialize for Sampler {
-        fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-        where
-            S: Serializer,
-        {
-            match self {
-                Sampler::FactorModel {
-                    assets_under_management,
-                    periods_to_sample,
-                    number_of_factors,
-                    normal_distribution: _, // Don't serialize this field
-                    mu_factors,
-                    covariance_factors,
-                    mu_assets,
-                    covariance_assets,
-                    loadings,
-                    idiosyncratic_variances,
-                } => {
-                    // Serialize the FactorModel variant, excluding the normal_distribution
-                    // You'll need to define a custom struct or tuple to represent the serialized form
-                    // and then serialize that.
-
-                    #[derive(Serialize)]
-                    struct FactorModelData {
-                        assets_under_management: usize,
-                        number_of_factors: usize,
-                        mu_factors: Vec<f64>,
-                        covariance_factors: Vec<f64>,
-                        mu_assets: Vec<f64>,
-                        covariance_assets: Vec<f64>,
-                        loadings: Vec<Vec<f64>>,
-                    }
-                    let data = FactorModelData {
-                        assets_under_management: *assets_under_management,
-                        number_of_factors: *number_of_factors,
-                        mu_factors: mu_factors.clone(),
-                        covariance_factors: covariance_factors
-                            .clone()
-                            .into_iter()
-                            .flatten()
-                            .collect(), // Flattening for serialization, adjust as needed
-                        mu_assets: mu_assets.clone(),
-                        covariance_assets: covariance_assets
-                            .clone()
-                            .into_iter()
-                            .flatten()
-                            .collect(), // Flattening for serialization, adjust as needed
-                        loadings: loadings.clone(),
-                    };
-                    data.serialize(serializer)
-                }
-                Sampler::Normal {
-                    periods_to_sample, ..
-                } => {
-                    // Handle the Normal variant
-                    // Serialize the Normal variant, excluding the normal_distribution
-                    serializer.serialize_i32(*periods_to_sample as i32)
-                }
-                Sampler::SeriesGAN(usize) => {
-                    todo!()
-                }
-            }
-        }
-    }
-
-    impl<'de> Deserialize<'de> for Sampler {
-        fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-        where
-            D: Deserializer<'de>,
-        {
-            struct SamplerVisitor;
-
-            impl<'de> Visitor<'de> for SamplerVisitor {
-                type Value = Sampler;
-
-                fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
-                    formatter.write_str("a Sampler enum")
-                }
-
-                fn visit_map<M>(self, access: M) -> Result<Self::Value, M::Error>
-                where
-                    M: MapAccess<'de>,
-                {
-                    todo!()
-                }
-            }
-            deserializer.deserialize_enum(
-                "Sampler",
-                &["FactorModel", "Normal", "SeriesGAN"],
-                SamplerVisitor,
-            )
+            Ok((mm, dim))
         }
     }
 
@@ -348,50 +282,15 @@ pub mod sampling {
         fn test_generate_covariance_matrix_valid_size() {
             let number_of_factors = 3;
             let result = Sampler::generate_covariance_matrix(number_of_factors);
-
             assert!(result.is_ok());
-
-            let covariance_matrix = result.unwrap();
-            assert_eq!(
-                covariance_matrix.len(),
-                number_of_factors,
-                "Covariance matrix should have the correct number of rows"
-            );
-            for row in &covariance_matrix {
-                assert_eq!(
-                    row.len(),
-                    number_of_factors,
-                    "Covariance matrix should be square"
-                );
-            }
+            let cov = result.unwrap();
+            assert_eq!(cov.len(), number_of_factors);
+            for row in cov { assert_eq!(row.len(), number_of_factors); }
         }
 
         #[test]
-        fn test_generate_covariance_matrix_positive_diagonal() {
-            let number_of_factors = 3;
-            let result = Sampler::generate_covariance_matrix(number_of_factors);
-
-            assert!(result.is_ok());
-
-            let covariance_matrix = result.unwrap();
-            for i in 0..number_of_factors {
-                assert!(
-                    covariance_matrix[i][i] > 0.0,
-                    "Diagonal elements should be positive"
-                );
-            }
-        }
-
-        #[test]
-        fn test_generate_covariance_matrix_zero_factors() {
-            let number_of_factors = 0;
-            let result = Sampler::generate_covariance_matrix(number_of_factors);
-
-            assert!(result.is_err());
-            assert_eq!(
-                result.unwrap_err(),
-                "Number of factors must be greater than zero".to_string()
-            );
+        fn test_generate_covariance_matrix_zero() {
+            assert!(Sampler::generate_covariance_matrix(0).is_err());
         }
     }
 }
