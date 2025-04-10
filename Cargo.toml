@@ -17,8 +17,9 @@ anyhow = "1.0.97"
 tracing = "0.1.41"
 tonic = "0.13.0"
 futures = "0.3.31"
-athena = { git = "https://github.com/ARelaxedScholar/Athena"}
+aegis_athena_contracts = { git = "https://github.com/ARelaxedScholar/Aegis-Athena-Contracts" }
 utoipa = "5.3.1"
+tracing-subscriber = "0.3.19"
 
 [lib]
 name = "aegis"
