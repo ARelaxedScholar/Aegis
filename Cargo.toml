@@ -1,5 +1,5 @@
 [package]
-name = "simulation_gante_carlo"
+name = "aegis"
 version = "0.1.0"
 edition = "2021"
 
@@ -21,7 +21,7 @@ athena = { git = "https://github.com/ARelaxedScholar/Athena"}
 utoipa = "5.3.1"
 
 [lib]
-name = "rusty_evolution"
+name = "aegis"
 path = "src/lib.rs"
 crate_type = ["cdylib"]
 
