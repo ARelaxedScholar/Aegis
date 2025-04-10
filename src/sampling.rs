@@ -24,15 +24,14 @@ pub mod sampling {
             let sampler = match mode {
                 "factor" => Sampler::factor_model_synthetic(assets, factors, periods, seed)
                     .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e))?,
-                "normal" => Sampler::normal(
-                    vec![0.0; assets],
-                    vec![1.0; assets * assets],
-                    periods,
-                    seed,
-                ),
-                _ => return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                    "mode must be \"factor\" or \"normal\"",
-                )),
+                "normal" => {
+                    Sampler::normal(vec![0.0; assets], vec![1.0; assets * assets], periods, seed)
+                }
+                _ => {
+                    return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+                        "mode must be \"factor\" or \"normal\"",
+                    ))
+                }
             };
             Ok(PySampler { sampler })
         }
@@ -165,9 +164,7 @@ pub mod sampling {
             }
         }
 
-        fn generate_covariance_matrix(
-            number_of_factors: usize,
-        ) -> Result<Vec<Vec<f64>>, String> {
+        fn generate_covariance_matrix(number_of_factors: usize) -> Result<Vec<Vec<f64>>, String> {
             if number_of_factors == 0 {
                 return Err("Number of factors must be greater than zero".to_string());
             }
@@ -255,9 +252,7 @@ pub mod sampling {
             }
         }
 
-        pub fn find_min_max(
-            raw_sequence: &[Vec<f64>],
-        ) -> Result<(Vec<(f64, f64)>, usize), String> {
+        pub fn find_min_max(raw_sequence: &[Vec<f64>]) -> Result<(Vec<(f64, f64)>, usize), String> {
             if raw_sequence.is_empty() {
                 return Err("Passed an empty sequence".to_string());
             }
@@ -285,7 +280,9 @@ pub mod sampling {
             assert!(result.is_ok());
             let cov = result.unwrap();
             assert_eq!(cov.len(), number_of_factors);
-            for row in cov { assert_eq!(row.len(), number_of_factors); }
+            for row in cov {
+                assert_eq!(row.len(), number_of_factors);
+            }
         }
 
         #[test]
