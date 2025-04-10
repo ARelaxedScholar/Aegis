@@ -1,7 +1,7 @@
 use crate::{
     evolution::portfolio_evolution::portfolio_evolution::{
-        standard_evolve_portfolios as native_standard_evolve_portfolios, EvolutionResult,
-        StandardEvolutionConfig,
+        standard_evolve_portfolios as native_standard_evolve_portfolios, EvolutionConfig,
+        EvolutionResult,
     },
     Portfolio, Sampler,
 };
