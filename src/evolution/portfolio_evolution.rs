@@ -211,7 +211,7 @@ pub mod portfolio_evolution {
             .collect()
     }
 
-    #[derive(Serialize, Deserialize, Debug, Clone)]
+    #[derive(Serialize, Deserialize, Debug, Clone, utoipa::ToSchema)]
     pub struct StandardEvolutionConfig {
         pub time_horizon_in_days: usize,
         pub generations: usize,
@@ -241,7 +241,7 @@ pub mod portfolio_evolution {
         pub low_volatility_threshold: f64,
     }
 
-    #[derive(Serialize, Deserialize, Debug, Clone)]
+    #[derive(Serialize, Deserialize, Debug, Clone, utoipa::ToSchema)]
     pub struct MemeticEvolutionConfig {
         #[serde(flatten)]
         pub base: StandardEvolutionConfig,
@@ -265,7 +265,7 @@ pub mod portfolio_evolution {
         pub population_average_sharpe: f64,
     }
 
-    #[derive(Serialize, Deserialize, Debug)]
+    #[derive(Serialize, Deserialize, Debug, utoipa::ToSchema)]
     pub struct EvolutionResult {
         pub pareto_fronts: Vec<Vec<Portfolio>>,
         pub best_average_return_per_generation: Vec<f64>,
