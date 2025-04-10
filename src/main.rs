@@ -1,20 +1,13 @@
-use std::{env, net::SocketAddr, sync::Arc};
-use axum::{
-    Router,
-    routing::post,
-    http::StatusCode,
-};
 use axum::middleware::from_fn;
-use tower_http::{
-    trace::TraceLayer,
-    compression::CompressionLayer,
-    cors::CorsLayer,
-    request_id::MakeRequestUuid,
-    request_id::SetRequestIdLayer,
-};
+use axum::{http::StatusCode, routing::post, Router};
 use dotenv::dotenv;
+use handlers::{handle_memetic_evolve, handle_standard_evolve};
+use std::{env, net::SocketAddr, sync::Arc};
+use tower_http::{
+    compression::CompressionLayer, cors::CorsLayer, request_id::MakeRequestUuid,
+    request_id::SetRequestIdLayer, trace::TraceLayer,
+};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
-use handlers::{handle_standard_evolve, handle_memetic_evolve};
 
 #[tokio::main]
 async fn main() {
@@ -42,9 +35,7 @@ async fn main() {
         .route("/evolve/memetic", post(handle_memetic_evolve))
         .layer(
             tower::ServiceBuilder::new()
-                .layer(SetRequestIdLayer::new(
-                    MakeRequestUuid,
-                ))
+                .layer(SetRequestIdLayer::new(MakeRequestUuid))
                 .layer(TraceLayer::new_for_http())
                 .layer(CompressionLayer::new())
                 .layer(CorsLayer::permissive())
