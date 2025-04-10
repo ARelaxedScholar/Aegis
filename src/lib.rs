@@ -13,10 +13,11 @@ use rand::prelude::*;
 use statrs::distribution::MultivariateNormal;
 
 // Modules
+mod athena_client;
 mod consts;
 mod evolution;
 mod portfolio;
 mod sampling;
-mod athena_client;
+mod handlers;
 
 // Actual Code
