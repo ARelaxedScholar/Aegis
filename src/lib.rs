@@ -16,8 +16,8 @@ use statrs::distribution::MultivariateNormal;
 mod athena_client;
 mod consts;
 mod evolution;
+mod handlers;
 mod portfolio;
 mod sampling;
-mod handlers;
 
 // Actual Code
