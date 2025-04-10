@@ -6,7 +6,6 @@ use axum::{extract::Json, http::StatusCode, response::IntoResponse};
 use serde::Deserialize;
 use utoipa::ToSchema;
 
-
 #[derive(Serialize, Deserialize, ToSchema)]
 pub struct ErrorResponse {
     pub error: String,
@@ -24,20 +23,12 @@ pub struct ErrorResponse {
 )]
 async fn handle_standard_evolve(Json(payload): Json<StandardEvolutionConfig>) -> impl IntoResponse {
     // Initialize or load population
-    let population = initialize_population(
-        payload.population_size,
-        payload.assets_under_management,
-    )
-    .map_err(|e| (StatusCode::BAD_REQUEST, Json(ErrorResponse { error: e })))?;
+    let population =
+        initialize_population(payload.population_size, payload.assets_under_management)
+            .map_err(|e| (StatusCode::BAD_REQUEST, Json(ErrorResponse { error: e })))?;
 
     // Call the evolution
-    match standard_evolve_portfolios(
-        payload,
-        payload.athena_endpoint.clone(),
-        population,
-    )
-    .await
-    {
+    match standard_evolve_portfolios(payload, payload.athena_endpoint.clone(), population).await {
         result => {
             let res: EvolutionResult = result;
             (StatusCode::OK, Json(res))
@@ -62,12 +53,7 @@ async fn handle_memetic_evolve(Json(payload): Json<MemeticEvolutionConfig>) -> i
     )
     .map_err(|e| (StatusCode::BAD_REQUEST, Json(ErrorResponse { error: e })))?;
 
-    match memetic_evolve_portfolios(
-        payload,
-        payload.base.athena_endpoint.clone(),
-        population,
-    )
-    .await
+    match memetic_evolve_portfolios(payload, payload.base.athena_endpoint.clone(), population).await
     {
         result => {
             let res: EvolutionResult = result;
