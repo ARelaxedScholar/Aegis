@@ -1,5 +1,8 @@
 use crate::{
-    evolution::portfolio_evolution::portfolio_evolution::MemeticEvolutionConfig,
+    evolution::portfolio_evolution::portfolio_evolution::{
+        memetic_evolve_portfolios, standard_evolve_portfolios, MemeticEvolutionConfig,
+        StandardEvolutionConfig,
+    },
     portfolio_evolution::{EvolutionResult, StandardEvolutionConfig},
 };
 use axum::{extract::Json, http::StatusCode, response::IntoResponse};
