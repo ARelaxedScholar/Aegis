@@ -4,12 +4,20 @@ pub mod portfolio_evolution {
 
     use crate::{Portfolio, Sampler, FLOAT_COMPARISON_EPSILON};
     use crate::{NUMBER_OF_OPTIMIZATION_OBJECTIVES, PERTURBATION};
+    use athena_client::evaluate_population_distributed;
     use itertools::izip;
     use rand::distributions::Uniform;
     use rand::prelude::*;
     use rayon::prelude::*;
     use serde::{Deserialize, Serialize};
 
+<<<<<<< HEAD
+=======
+    fn default_max_concurrency() -> usize {
+        num_cpus::get()
+    }
+
+>>>>>>> 59a3cdd (feat(portfolio_evolution.rs): It is now distributed, yay.)
     /// Finds the indices of non-dominated portfolios within a slice.
     ///
     /// A portfolio is non-dominated if no other portfolio in the slice
@@ -117,7 +125,11 @@ pub mod portfolio_evolution {
                 // Should not happen if there are remaining portfolios unless there's an issue
                 // or potentially if all remaining portfolios are identical and dominate each other somehow?
                 // like even for the final front, non_dominated_indices would just contain all the portfolios since they are all mutually non-dominated.
+<<<<<<< HEAD
                 eprintln!("Warning: Found no non-dominated portfolios among remaining {} portfolios. Breaking sort.", remaining_portfolios.len());
+=======
+                warn!("Warning: Found no non-dominated portfolios among remaining {} portfolios. Breaking sort.", remaining_portfolios.len());
+>>>>>>> 59a3cdd (feat(portfolio_evolution.rs): It is now distributed, yay.)
                 // We treat those weird portfolios as a single final front
                 if !remaining_portfolios.is_empty() {
                     fronts.push(remaining_portfolios.clone()); // Add remaining as a last front
@@ -218,6 +230,42 @@ pub mod portfolio_evolution {
         pub tournament_size: usize,
         pub sampler: Sampler,
         pub generation_check_interval: usize,
+        #[serde(default = "default_max_concurrency")]
+        pub max_concurrency: usize,
+    }
+
+    #[derive(Serialize, Deserialize, Debug, Clone)]
+    pub struct MemeticParams {
+        /// objective to use during the proximal step
+        pub local_objective: Objective,
+        pub proximal_descent_steps: usize,
+        pub proximal_descent_step_size: f64,
+        pub high_sharpe_threshold: f64,
+        pub low_volatility_threshold: f64,
+    }
+
+    #[derive(Serialize, Deserialize, Debug, Clone)]
+    pub struct MemeticEvolutionConfig {
+        #[serde(flatten)]
+        pub base: StandardEvolutionConfig,
+        pub memetic: MemeticParams,
+    }
+
+    /// Contains summary statistics for the final population after evolution.
+    #[derive(Serialize, Deserialize, Debug, Clone)]
+    pub struct FinalPopulationSummary {
+        /// Best (highest) average return found in the final population.
+        pub best_return: f64,
+        /// Average of the average returns across the final population.
+        pub population_average_return: f64,
+        /// Best (lowest) average volatility found in the final population.
+        pub best_volatility: f64,
+        /// Average of the average volatilities across the final population.
+        pub population_average_volatility: f64,
+        /// Best (highest) average Sharpe ratio found in the final population.
+        pub best_sharpe: f64,
+        /// Average of the average Sharpe ratios across the final population.
+        pub population_average_sharpe: f64,
     }
 
     #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -275,7 +323,11 @@ pub mod portfolio_evolution {
     // 4.ii solutions that would be allowed to reproduce using crossover.
     // 4.iii We'd also mutate the allocation stochastically in such away tha randomly an increment is done to one component (and equivalent decrement is done to another)
     // 5. Repeat until golden brown. lel
+<<<<<<< HEAD
     pub fn standard_evolve_portfolios(config: StandardEvolutionConfig) -> EvolutionResult {
+=======
+    pub async fn standard_evolve_portfolios(config: StandardEvolutionConfig, athena_endpoint: String, population : Vec<Vec<f64>>) -> EvolutionResult {
+>>>>>>> 59a3cdd (feat(portfolio_evolution.rs): It is now distributed, yay.)
         // Initialization Phase
         //
         // Common Enough to Alias
@@ -286,7 +338,11 @@ pub mod portfolio_evolution {
         let elite_population_size = ((population_size as f64) * config.elitism_rate) as usize;
         // Ensure elite size is reasonable
         if elite_population_size == 0 && config.elitism_rate > 0.0 {
+<<<<<<< HEAD
             eprintln!("Warning: Elite population size rounded to 0, check population size and elitism rate.");
+=======
+            warn!("Warning: Elite population size rounded to 0, check population size and elitism rate.");
+>>>>>>> 59a3cdd (feat(portfolio_evolution.rs): It is now distributed, yay.)
         }
         if elite_population_size >= population_size {
             panic!("Elite population size cannot be >= total population size.");
@@ -294,8 +350,12 @@ pub mod portfolio_evolution {
         let offspring_count = population_size - elite_population_size;
 
         // For each portfolio we sample from a Uniform and then normalize
+<<<<<<< HEAD
         let mut population: Vec<Vec<f64>> =
             initialize_population(population_size, config.assets_under_management).unwrap();
+=======
+        let mut population: Vec<Vec<f64>> = population;
+>>>>>>> 59a3cdd (feat(portfolio_evolution.rs): It is now distributed, yay.)
 
         // Put here so that we can pass it to the final step
         let mut simulation_average_returns: Vec<f64> = vec![0.; population_size];
@@ -313,7 +373,14 @@ pub mod portfolio_evolution {
 
         // EVOLUTION BABY!!!
         for generation in 0..generations {
+<<<<<<< HEAD
             let eval_result = evaluate_population_performance(&population, &config);
+=======
+            let eval_result =
+                evaluate_population_distributed(&population, &config, &athena_endpoint)
+                    .await
+                    .expect("Failed to evaluate population");
+>>>>>>> 59a3cdd (feat(portfolio_evolution.rs): It is now distributed, yay.)
 
             // --- Extract results ---
             let simulation_average_returns = eval_result.average_returns; // Per-portfolio
@@ -337,18 +404,31 @@ pub mod portfolio_evolution {
                 &simulation_average_volatilities,
                 &simulation_average_sharpe_ratios,
             );
+<<<<<<< HEAD
             
+=======
+
+>>>>>>> 59a3cdd (feat(portfolio_evolution.rs): It is now distributed, yay.)
             let mut fronts = build_pareto_fronts(&portfolio_structs);
             let breeding_pool: Vec<&Portfolio> = fronts.iter().flatten().collect();
             let mut next_generation: Vec<Vec<f64>> = Vec::new();
 
             // Adding Elites (Exploitation)
+<<<<<<< HEAD
             for front in fronts.iter() { // Iterate through fronts (already ordered by rank: F1, F2, ...)
+=======
+            for front in fronts.iter() {
+                // Iterate through fronts (already ordered by rank: F1, F2, ...)
+>>>>>>> 59a3cdd (feat(portfolio_evolution.rs): It is now distributed, yay.)
                 if next_generation.len() >= elite_population_size {
                     // Stop if we already have enough elites
                     break;
                 }
+<<<<<<< HEAD
         
+=======
+
+>>>>>>> 59a3cdd (feat(portfolio_evolution.rs): It is now distributed, yay.)
                 if next_generation.len() + front.len() <= elite_population_size {
                     // If the entire current front fits within the remaining elite slots, add them all.
                     for portfolio in front.iter() {
@@ -357,7 +437,11 @@ pub mod portfolio_evolution {
                 } else {
                     // If the entire front doesn't fit, we need to take the best ones based on crowding distance.
                     let needed = elite_population_size - next_generation.len();
+<<<<<<< HEAD
         
+=======
+
+>>>>>>> 59a3cdd (feat(portfolio_evolution.rs): It is now distributed, yay.)
                     // Sort *this specific front* by crowding distance (descending).
                     // Cloning the front is necessary to sort it without affecting the original `fronts` structure.
                     let mut sorted_partial_front = front.clone();
@@ -369,12 +453,20 @@ pub mod portfolio_evolution {
                         let dist_b = b.crowding_distance.unwrap_or(f64::NEG_INFINITY);
                         dist_b.total_cmp(&dist_a) // total_cmp is safer for floats
                     });
+<<<<<<< HEAD
         
+=======
+
+>>>>>>> 59a3cdd (feat(portfolio_evolution.rs): It is now distributed, yay.)
                     // Take the top 'needed' portfolios from the sorted front.
                     for portfolio in sorted_partial_front.iter().take(needed) {
                         next_generation.push(portfolio.weights.clone());
                     }
+<<<<<<< HEAD
         
+=======
+
+>>>>>>> 59a3cdd (feat(portfolio_evolution.rs): It is now distributed, yay.)
                     // Elites are now full, break the outer loop over fronts.
                     break;
                 }
@@ -391,7 +483,14 @@ pub mod portfolio_evolution {
         }
 
         // --- Final Evaluation After the Loop ---
+<<<<<<< HEAD
         let final_eval_result = evaluate_population_performance(&population, &config);
+=======
+        let final_eval_result =
+            evaluate_population_performance_distributed(&population, &config, &athena_endpoint)
+                .await
+                .expect("Failed to evaluate final population");
+>>>>>>> 59a3cdd (feat(portfolio_evolution.rs): It is now distributed, yay.)
 
         // Create final portfolio structs using the final weights and *final* evaluation results
         let mut final_portfolio_structs = turn_weights_into_portfolios(
@@ -427,7 +526,11 @@ pub mod portfolio_evolution {
         //
     }
 
+<<<<<<< HEAD
     pub fn memetic_evolve_portfolios(config: MemeticEvolutionConfig) -> EvolutionResult {
+=======
+    pub async fn memetic_evolve_portfolios(config: MemeticEvolutionConfig, athena_endpoint: String, population: Vec<Vec<f64>>) -> EvolutionResult {
+>>>>>>> 59a3cdd (feat(portfolio_evolution.rs): It is now distributed, yay.)
         let population_size = config.base.population_size;
         let generations = config.base.generations;
         let elite_population_size =
@@ -437,14 +540,22 @@ pub mod portfolio_evolution {
 
         // Ensure elite size is reasonable
         if elite_population_size == 0 && config.base.elitism_rate > 0.0 {
+<<<<<<< HEAD
             eprintln!("Warning: Elite population size rounded to 0, check population size and elitism rate.");
+=======
+            warn!("Warning: Elite population size rounded to 0, check population size and elitism rate.");
+>>>>>>> 59a3cdd (feat(portfolio_evolution.rs): It is now distributed, yay.)
         }
         if elite_population_size >= population_size {
             panic!("Elite population size cannot be >= total population size.");
         }
 
         let mut population: Vec<Vec<f64>> =
+<<<<<<< HEAD
             initialize_population(population_size, config.base.assets_under_management).unwrap();
+=======
+            population;
+>>>>>>> 59a3cdd (feat(portfolio_evolution.rs): It is now distributed, yay.)
 
         // Add new config params needed for memetic part
         let proximal_steps = config.memetic.proximal_descent_steps;
@@ -469,7 +580,17 @@ pub mod portfolio_evolution {
         // --- Main Evolution Loop ---
         for generation in 0..generations {
             // Evaluate the current population
+<<<<<<< HEAD
             let eval_result = evaluate_population_performance(&population, &config.base);
+=======
+            let eval_result = evaluate_population_performance_distributed(
+                &population,
+                &config.base,
+                &athena_endpoint,
+            )
+            .await
+            .expect("Failed to evaluate population");
+>>>>>>> 59a3cdd (feat(portfolio_evolution.rs): It is now distributed, yay.)
 
             // --- Extract results ---
             let simulation_average_returns = eval_result.average_returns; // Per-portfolio
@@ -585,7 +706,11 @@ pub mod portfolio_evolution {
 
             // Final check for population size consistency
             if next_generation.len() != population_size {
+<<<<<<< HEAD
                 eprintln!("Warning: Population size mismatch ({}) at end of generation {}. Should be {}. Resizing.", next_generation.len(), generation, population_size);
+=======
+                warn!("Warning: Population size mismatch ({}) at end of generation {}. Should be {}. Resizing.", next_generation.len(), generation, population_size);
+>>>>>>> 59a3cdd (feat(portfolio_evolution.rs): It is now distributed, yay.)
                 // Simple resize/fill strategy, might need refinement
                 next_generation.resize_with(population_size, || {
                     let mut rng = thread_rng();
@@ -608,7 +733,17 @@ pub mod portfolio_evolution {
         } // End of generation loop
 
         // --- Final Evaluation After the Loop ---
+<<<<<<< HEAD
         let final_eval_result = evaluate_population_performance(&population, &config.base);
+=======
+        let final_eval_result = evaluate_population_performance_distributed(
+            &population,
+            &config.base,
+            &athena_endpoint,
+        )
+        .await
+        .expect("Failed to evaluate final population");
+>>>>>>> 59a3cdd (feat(portfolio_evolution.rs): It is now distributed, yay.)
 
         // Create final portfolio structs using the final weights and *final* evaluation results
         let mut final_portfolio_structs = turn_weights_into_portfolios(
@@ -688,11 +823,16 @@ pub mod portfolio_evolution {
 
     fn tournament_selection(population_refs: &[&Portfolio], k: usize) -> Vec<f64> {
         let mut rng = thread_rng();
+<<<<<<< HEAD
     
+=======
+
+>>>>>>> 59a3cdd (feat(portfolio_evolution.rs): It is now distributed, yay.)
         // 1. Choose k references randomly from the population slice.
         // choose_multiple returns an iterator yielding references to the elements of the slice.
         // Since the slice contains `&Portfolio`, the iterator yields `&&Portfolio`.
         let contestants: Vec<&&Portfolio> = population_refs.choose_multiple(&mut rng, k).collect();
+<<<<<<< HEAD
     
         // Handle the case where k is 0 or larger than population size (choose_multiple might return fewer)
         if contestants.is_empty() {
@@ -700,10 +840,26 @@ pub mod portfolio_evolution {
             panic!("Tournament selection failed: No contestants selected (k={}, population_size={})", k, population_refs.len());
         }
     
+=======
+
+        // Handle the case where k is 0 or larger than population size (choose_multiple might return fewer)
+        if contestants.is_empty() {
+            // This shouldn't happen if k > 0 and population_refs is not empty,
+            // but handle defensively. Return uniform weights? Panic?
+            // Let's panic as it indicates a configuration issue or unexpected state.
+            panic!(
+                "Tournament selection failed: No contestants selected (k={}, population_size={})",
+                k,
+                population_refs.len()
+            );
+        }
+
+>>>>>>> 59a3cdd (feat(portfolio_evolution.rs): It is now distributed, yay.)
         // 2. Find the best contestant among the selected references.
         // We iterate through the contestants (&&Portfolio) and find the minimum
         // based on the Portfolio's comparison logic (rank then crowding distance).
         // We need to dereference twice (&&Portfolio -> &Portfolio) to use partial_cmp.
+<<<<<<< HEAD
         let winner: &&Portfolio = contestants.into_iter().min_by(|&&a, &&b| {
             // Compare the &Portfolio references using the implemented PartialOrd
             a.partial_cmp(b)
@@ -711,6 +867,17 @@ pub mod portfolio_evolution {
                                         // Or Ordering::Less/Greater if a default is needed
         }).expect("Failed to find a winner in tournament selection"); // Should not happen if contestants is not empty
     
+=======
+        let winner: &&Portfolio = contestants
+            .into_iter()
+            .min_by(|&&a, &&b| {
+                // Compare the &Portfolio references using the implemented PartialOrd
+                a.partial_cmp(b).unwrap_or(Ordering::Equal) // Treat non-comparable as equal for sorting
+                                                            // Or Ordering::Less/Greater if a default is needed
+            })
+            .expect("Failed to find a winner in tournament selection"); // Should not happen if contestants is not empty
+
+>>>>>>> 59a3cdd (feat(portfolio_evolution.rs): It is now distributed, yay.)
         // 3. Clone the weights of the winning portfolio.
         // Dereference the winner (&&Portfolio -> &Portfolio) and clone its weights.
         winner.weights.clone()
@@ -903,6 +1070,7 @@ pub mod portfolio_evolution {
     ) -> PopulationEvaluationResult {
         let population_size = population.len();
         if population_size == 0 {
+<<<<<<< HEAD
             return PopulationEvaluationResult {
                 average_returns: vec![],
                 average_volatilities: vec![],
@@ -915,6 +1083,9 @@ pub mod portfolio_evolution {
                 best_sharpe: f64::NEG_INFINITY,
                 population_average_sharpe: 0.0,
             };
+=======
+            panic!("I am pretty sure I got checks for that already, but we shouldn't be here with a population of 0.");
+>>>>>>> 59a3cdd (feat(portfolio_evolution.rs): It is now distributed, yay.)
         }
 
         let simulations_per_generation = config.simulations_per_generation;
@@ -1081,7 +1252,11 @@ pub mod portfolio_evolution {
                 );
             } else if !partial_gradient.is_finite() {
                 // For robustness (we still log this)
+<<<<<<< HEAD
                 eprintln!(
+=======
+                warn!(
+>>>>>>> 59a3cdd (feat(portfolio_evolution.rs): It is now distributed, yay.)
                     "Warning: Non-finite gradient ({}) encountered. \
                      Index: {}, Objective: {:?}, Epsilon: {}, \
                      Base Perf: {:?}, Perturbed Perf: {:?}, Weights: {:?}. \
@@ -1179,8 +1354,12 @@ pub mod portfolio_evolution {
         } else {
             // CASE 2: Volatility IS effectively ZERO
             // Throwaway cause that's a useless portfolio (just cap it at 0. sharpe tadum-tsh)
+<<<<<<< HEAD
                 0.0
             
+=======
+            0.0
+>>>>>>> 59a3cdd (feat(portfolio_evolution.rs): It is now distributed, yay.)
         };
 
         PortfolioPerformance {
@@ -1256,6 +1435,7 @@ pub mod portfolio_evolution {
                 indices,
                 vec![0],
                 "Only the dominating portfolio should remain"
+<<<<<<< HEAD
             );
         }
 
@@ -1403,10 +1583,14 @@ pub mod portfolio_evolution {
             assert!(
                 result.final_summary.best_return.is_finite(),
                 "Best return should be finite"
+=======
+>>>>>>> 59a3cdd (feat(portfolio_evolution.rs): It is now distributed, yay.)
             );
         }
 
+        // Test build_pareto_fronts: Check that the front is built correctly.
         #[test]
+<<<<<<< HEAD
     fn test_memetic_evolve_portfolios_smoke() {
         // Create a dummy Normal sampler with constant returns.
         let dummy_normal = MultivariateNormal::new(
@@ -1470,5 +1654,109 @@ pub mod portfolio_evolution {
         
         println!("Final Population Summary: {:?}", result.final_summary);
     }
+=======
+        fn test_build_pareto_fronts() {
+            let p1 = create_portfolio(0.10, 0.05, 2.0); // Non-dominated
+            let p2 = create_portfolio(0.05, 0.10, 1.0); // Dominated by p1
+            let p3 = create_portfolio(0.12, 0.06, 2.5); // Non-dominated
+            let portfolios = vec![p1.clone(), p2.clone(), p3.clone()];
+            let fronts = build_pareto_fronts(&portfolios);
+            // Expect front 1 to contain p1 and p3 (order may vary)
+            assert_eq!(
+                fronts[0].len(),
+                2,
+                "Pareto front should have two portfolios"
+            );
+            // Check that the dominated one (p2) is not in the first front.
+            for portfolio in fronts[0].iter() {
+                assert_ne!(
+                    portfolio.average_returns, p2.average_returns,
+                    "Dominated portfolio should be removed"
+                );
+            }
+        }
+
+        // Test proximal_step: ensure projection onto the simplex.
+        #[test]
+        fn test_proximal_step_projection() {
+            let unsorted = vec![0.5, 0.2, 0.3, -0.1];
+            let projected = proximal_step(&unsorted);
+            for &w in projected.iter() {
+                assert!(w >= 0.0, "All weights must be non-negative");
+            }
+            let sum: f64 = projected.iter().sum();
+            assert!(
+                (sum - 1.0).abs() < FLOAT_COMPARISON_EPSILON,
+                "Projected weights must sum to 1, got {}",
+                sum
+            );
+        }
+
+        // Test compute_portfolio_performance with zero returns.
+        #[test]
+        fn test_compute_portfolio_performance_zero_returns() {
+            // 10 periods, 4 assets, all returns zero.
+            let returns = vec![vec![0.0; 4]; 10];
+            let weights = vec![0.25, 0.25, 0.25, 0.25];
+            let performance =
+                compute_portfolio_performance(&returns, &weights, 10000.0, 0.02, 365.0);
+
+            assert!(
+                (performance.annualized_return).abs() < FLOAT_COMPARISON_EPSILON,
+                "Annualized return should be 0, but got {}",
+                performance.annualized_return
+            );
+            assert!(
+                (performance.percent_annualized_volatility).abs() < FLOAT_COMPARISON_EPSILON,
+                "Volatility should be 0, but got {}",
+                performance.percent_annualized_volatility
+            );
+            assert_eq!(
+                performance.sharpe_ratio, 0.0,
+                "Sharpe ratio should be 0 when returns equal risk-free, but got {}",
+                performance.sharpe_ratio
+            );
+        }
+
+        // Test compute_portfolio_performance panics with zero time horizon.
+        #[test]
+        #[should_panic(expected = "time_horizon_in_days cannot be zero")]
+        fn test_compute_portfolio_performance_zero_time() {
+            let returns = vec![vec![0.0; 4]; 10];
+            let weights = vec![0.25, 0.25, 0.25, 0.25];
+            let _ = compute_portfolio_performance(&returns, &weights, 10000.0, 0.02, 0.0);
+        }
+
+        // Test compute_portfolio_performance panics with zero money to invest.
+        #[test]
+        #[should_panic(expected = "money_to_invest cannot be zero")]
+        fn test_compute_portfolio_performance_zero_money() {
+            let returns = vec![vec![0.0; 4]; 10];
+            let weights = vec![0.25, 0.25, 0.25, 0.25];
+            let _ = compute_portfolio_performance(&returns, &weights, 0.0, 0.02, 365.0);
+        }
+
+        // Test compute_portfolio_gradient: Ensure no NaNs or Infs.
+        #[test]
+        fn test_compute_portfolio_gradient_no_nan() {
+            let returns = vec![vec![0.01; 4]; 10];
+            let weights = vec![0.25, 0.25, 0.25, 0.25];
+            let base_perf = compute_portfolio_performance(&returns, &weights, 10000.0, 0.02, 365.0);
+            let grad = compute_portfolio_gradient(
+                &returns,
+                &weights,
+                base_perf,
+                10000.0,
+                0.02,
+                365.0,
+                Objective::AnnualizedReturns,
+            );
+            for g in grad.iter() {
+                assert!(g.is_finite(), "Gradient component must be finite");
+                assert!(!g.is_nan(), "Gradient component must not be NaN");
+            }
+        }
+        
+>>>>>>> 59a3cdd (feat(portfolio_evolution.rs): It is now distributed, yay.)
     }
 }
