@@ -1,11 +1,12 @@
 pub mod portfolio_evolution {
     use std::cmp::Ordering;
-    use std::f64::EPSILON;
 
-    use crate::{Portfolio, Sampler, FLOAT_COMPARISON_EPSILON, athena_client::evaluate_population_performance_distributed};
+    use crate::athena_client::evaluate_population_distributed;
+    use crate::{Portfolio, Sampler, FLOAT_COMPARISON_EPSILON};
+
     use crate::{NUMBER_OF_OPTIMIZATION_OBJECTIVES, PERTURBATION};
-    use num_cpus;
     use itertools::izip;
+    use num_cpus;
     use rand::distributions::Uniform;
     use rand::prelude::*;
     use rayon::prelude::*;
@@ -264,8 +265,6 @@ pub mod portfolio_evolution {
         pub population_average_sharpe: f64,
     }
 
-
-
     #[derive(Serialize, Deserialize, Debug)]
     pub struct EvolutionResult {
         pub pareto_fronts: Vec<Vec<Portfolio>>,
@@ -287,7 +286,11 @@ pub mod portfolio_evolution {
     // 4.ii solutions that would be allowed to reproduce using crossover.
     // 4.iii We'd also mutate the allocation stochastically in such away tha randomly an increment is done to one component (and equivalent decrement is done to another)
     // 5. Repeat until golden brown. lel
-    pub async fn standard_evolve_portfolios(config: StandardEvolutionConfig, athena_endpoint: String, population : Vec<Vec<f64>>) -> EvolutionResult {
+    pub async fn standard_evolve_portfolios(
+        config: StandardEvolutionConfig,
+        athena_endpoint: String,
+        population: Vec<Vec<f64>>,
+    ) -> EvolutionResult {
         // Initialization Phase
         //
         // Common Enough to Alias
@@ -325,7 +328,7 @@ pub mod portfolio_evolution {
         // EVOLUTION BABY!!!
         for generation in 0..generations {
             let eval_result =
-                evaluate_population_distributed(&population, &config, &athena_endpoint)
+                evaluate_population_performance_distributed(&population, &config, &athena_endpoint)
                     .await
                     .expect("Failed to evaluate population");
 
@@ -440,7 +443,11 @@ pub mod portfolio_evolution {
         //
     }
 
-    pub async fn memetic_evolve_portfolios(config: MemeticEvolutionConfig, athena_endpoint: String, population: Vec<Vec<f64>>) -> EvolutionResult {
+    pub async fn memetic_evolve_portfolios(
+        config: MemeticEvolutionConfig,
+        athena_endpoint: String,
+        population: Vec<Vec<f64>>,
+    ) -> EvolutionResult {
         let population_size = config.base.population_size;
         let generations = config.base.generations;
         let elite_population_size =
@@ -456,8 +463,7 @@ pub mod portfolio_evolution {
             panic!("Elite population size cannot be >= total population size.");
         }
 
-        let mut population: Vec<Vec<f64>> =
-            population;
+        let mut population: Vec<Vec<f64>> = population;
 
         // Add new config params needed for memetic part
         let proximal_steps = config.memetic.proximal_descent_steps;
@@ -1382,6 +1388,5 @@ pub mod portfolio_evolution {
                 assert!(!g.is_nan(), "Gradient component must not be NaN");
             }
         }
-        
     }
 }
