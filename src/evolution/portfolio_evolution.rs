@@ -1,7 +1,7 @@
 pub mod portfolio_evolution {
     use std::cmp::Ordering;
 
-    use crate::athena_client::evaluate_population_distributed;
+    use crate::athena_client::evaluate_population_performance_distributed;
     use crate::{Portfolio, Sampler, FLOAT_COMPARISON_EPSILON};
 
     use crate::{NUMBER_OF_OPTIMIZATION_OBJECTIVES, PERTURBATION};
