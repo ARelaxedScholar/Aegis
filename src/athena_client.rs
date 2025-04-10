@@ -6,7 +6,7 @@ use simulation::simulation_service_client::SimulationServiceClient;
 use simulation::SimulationBatchRequest;
 use tonic::transport::Channel;
 
-pub async fn evaluate_population_distributed(
+pub async fn evaluate_population_performance_distributed(
     population: Vec<simulation::Portfolio>,
     config: &StandardEvolutionConfig,
     athena_endpoint: &str,
