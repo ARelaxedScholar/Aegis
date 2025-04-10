@@ -41,7 +41,7 @@ struct PyEvolutionResult {
 fn standard_evolve_portfolios(config: PyEvolutionConfig) -> PyEvolutionResult {
     let config: StandardEvolutionConfig = config.into();
     // call function
-    let evolution_result = native_standard_evolve_portfolios(config);
+    //let evolution_result = native_standard_evolve_portfolios(config);
     //
     let result: PyEvolutionResult = evolution_result.into();
     result
