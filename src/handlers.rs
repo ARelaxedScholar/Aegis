@@ -1,22 +1,39 @@
-use crate::portfolio_evolution::{EvolutionResult, StandardEvolutionConfig};
+use crate::{
+    evolution::portfolio_evolution::portfolio_evolution::MemeticEvolutionConfig,
+    portfolio_evolution::{EvolutionResult, StandardEvolutionConfig},
+};
 use axum::{extract::Json, http::StatusCode, response::IntoResponse};
+use serde::Deserialize;
+use utoipa::ToSchema;
 
-async fn handle_standard_evolve(Json(payload): Json<StandardEvolveRequest>) -> impl IntoResponse {
+
+#[derive(Serialize, Deserialize, ToSchema)]
+pub struct ErrorResponse {
+    pub error: String,
+}
+
+#[utoipa::path(
+    post,
+    path = "/evolve/standard",
+    tag = "Evolution",
+    request_body = StandardEvolutionConfig,
+    responses(
+        (status = 200, description = "Evolution completed successfully", body = EvolutionResult),
+        (status = 400, description = "Bad request", body = ErrorResponse)
+    )
+)]
+async fn handle_standard_evolve(Json(payload): Json<StandardEvolutionConfig>) -> impl IntoResponse {
     // Initialize or load population
-    let population = if let Some(pop) = payload.population {
-        pop
-    } else {
-        initialize_population(
-            payload.config.population_size,
-            payload.config.assets_under_management,
-        )
-        .map_err(|e| (StatusCode::BAD_REQUEST, Json(ErrorResponse { error: e })))?
-    };
+    let population = initialize_population(
+        payload.population_size,
+        payload.assets_under_management,
+    )
+    .map_err(|e| (StatusCode::BAD_REQUEST, Json(ErrorResponse { error: e })))?;
 
     // Call the evolution
     match standard_evolve_portfolios(
-        payload.config,
-        payload.config.athena_endpoint.clone(),
+        payload,
+        payload.athena_endpoint.clone(),
         population,
     )
     .await
@@ -28,20 +45,26 @@ async fn handle_standard_evolve(Json(payload): Json<StandardEvolveRequest>) -> i
     }
 }
 
-async fn handle_memetic_evolve(Json(payload): Json<MemeticEvolveRequest>) -> impl IntoResponse {
-    let population = if let Some(pop) = payload.population {
-        pop
-    } else {
-        initialize_population(
-            payload.config.base.population_size,
-            payload.config.base.assets_under_management,
-        )
-        .map_err(|e| (StatusCode::BAD_REQUEST, Json(ErrorResponse { error: e })))?
-    };
+#[utoipa::path(
+    post,
+    path = "/evolve/memetic",
+    tag = "Evolution",
+    request_body = MemeticEvolutionConfig,
+    responses(
+        (status = 200, description = "Evolution completed successfully", body = EvolutionResult),
+        (status = 400, description = "Bad request", body = ErrorResponse)
+    )
+)]
+async fn handle_memetic_evolve(Json(payload): Json<MemeticEvolutionConfig>) -> impl IntoResponse {
+    let population = initialize_population(
+        payload.base.population_size,
+        payload.base.assets_under_management,
+    )
+    .map_err(|e| (StatusCode::BAD_REQUEST, Json(ErrorResponse { error: e })))?;
 
     match memetic_evolve_portfolios(
-        payload.config,
-        payload.config.base.athena_endpoint.clone(),
+        payload,
+        payload.base.athena_endpoint.clone(),
         population,
     )
     .await

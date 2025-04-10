@@ -1,3 +1,4 @@
+use crate::docs::ApiDoc;
 use axum::middleware::from_fn;
 use axum::{http::StatusCode, routing::post, Router};
 use dotenv::dotenv;
@@ -8,6 +9,7 @@ use tower_http::{
     request_id::SetRequestIdLayer, trace::TraceLayer,
 };
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
+use utoipa_swagger_ui::{SwaggerUi, Url};
 
 #[tokio::main]
 async fn main() {
@@ -30,9 +32,9 @@ async fn main() {
     tracing::info!("Server starting on {}", addr);
 
     // Router
-    let app = Router::new()
-        .route("/evolve/standard", post(handle_standard_evolve))
-        .route("/evolve/memetic", post(handle_memetic_evolve))
+    let app_routes = Router::new()
+        .route("/evolve/standard", post(evolve_standard))
+        .route("/evolve/memetic", post(evolve_memetic))
         .layer(
             tower::ServiceBuilder::new()
                 .layer(SetRequestIdLayer::new(MakeRequestUuid))
@@ -41,6 +43,15 @@ async fn main() {
                 .layer(CorsLayer::permissive())
                 .into_inner(),
         );
+
+    // Build the OpenAPI object
+    let openapi = ApiDoc::openapi();
+
+    // Mount your swagger UI at `/docs`.
+    // The .url(...) argument sets the path to serve the raw JSON at.
+    let swagger_ui = SwaggerUi::new("/docs").url("/api-docs/openapi.json", openapi);
+
+    let app = app_routes.merge(swagger_ui);
 
     // Graceful shutdown
     let shutdown_signal = async {
