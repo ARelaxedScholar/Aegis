@@ -230,6 +230,8 @@ pub mod portfolio_evolution {
         pub tournament_size: usize,
         pub sampler: Sampler,
         pub generation_check_interval: usize,
+        #[serde(default)]
+        pub global_seed: Option<u64>,
         #[serde(default = "default_max_concurrency")]
         pub max_concurrency: usize,
     }
