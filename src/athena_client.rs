@@ -1,8 +1,8 @@
 use crate::portfolio_evolution::{PopulationEvaluationResult, StandardEvolutionConfig};
 use anyhow::Result;
 use futures::stream::{self, StreamExt};
-use simulation::simulation_service_client::SimulationServiceClient;
-use simulation::SimulationBatchRequest;
+use aegis_athena_contracts::simulation_service_client::SimulationServiceClient;
+use aegis_athena_contracts::{SimulationBatchRequest, EvolutionConfig};
 use std::sync::Arc;
 use std::time::SystemTime;
 use tonic::transport::Channel;
