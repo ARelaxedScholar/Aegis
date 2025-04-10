@@ -3,8 +3,8 @@ use anyhow::Result;
 use futures::stream::{self, StreamExt};
 use simulation::simulation_service_client::SimulationServiceClient;
 use simulation::SimulationBatchRequest;
-use std::time::SystemTime;
 use std::sync::Arc;
+use std::time::SystemTime;
 use tonic::transport::Channel;
 
 pub async fn evaluate_population_performance_distributed(
