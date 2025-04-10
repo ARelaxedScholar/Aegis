@@ -2,14 +2,15 @@ pub mod portfolio_evolution {
     use std::cmp::Ordering;
     use std::f64::EPSILON;
 
-    use crate::{Portfolio, Sampler, FLOAT_COMPARISON_EPSILON};
+    use crate::{Portfolio, Sampler, FLOAT_COMPARISON_EPSILON, athena_client::evaluate_population_performance_distributed};
     use crate::{NUMBER_OF_OPTIMIZATION_OBJECTIVES, PERTURBATION};
-    use athena_client::evaluate_population_distributed;
+    use num_cpus;
     use itertools::izip;
     use rand::distributions::Uniform;
     use rand::prelude::*;
     use rayon::prelude::*;
     use serde::{Deserialize, Serialize};
+    use tracing::warn;
 
     fn default_max_concurrency() -> usize {
         num_cpus::get()
@@ -263,39 +264,7 @@ pub mod portfolio_evolution {
         pub population_average_sharpe: f64,
     }
 
-    #[derive(Serialize, Deserialize, Debug, Clone)]
-    pub struct MemeticParams {
-        /// objective to use during the proximal step
-        pub local_objective: Objective,
-        pub proximal_descent_steps: usize,
-        pub proximal_descent_step_size: f64,
-        pub high_sharpe_threshold: f64,
-        pub low_volatility_threshold: f64,
-    }
 
-    #[derive(Serialize, Deserialize, Debug, Clone)]
-    pub struct MemeticEvolutionConfig {
-        #[serde(flatten)]
-        pub base: StandardEvolutionConfig,
-        pub memetic: MemeticParams,
-    }
-
-    /// Contains summary statistics for the final population after evolution.
-    #[derive(Serialize, Deserialize, Debug, Clone)]
-    pub struct FinalPopulationSummary {
-        /// Best (highest) average return found in the final population.
-        pub best_return: f64,
-        /// Average of the average returns across the final population.
-        pub population_average_return: f64,
-        /// Best (lowest) average volatility found in the final population.
-        pub best_volatility: f64,
-        /// Average of the average volatilities across the final population.
-        pub population_average_volatility: f64,
-        /// Best (highest) average Sharpe ratio found in the final population.
-        pub best_sharpe: f64,
-        /// Average of the average Sharpe ratios across the final population.
-        pub population_average_sharpe: f64,
-    }
 
     #[derive(Serialize, Deserialize, Debug)]
     pub struct EvolutionResult {

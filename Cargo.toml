@@ -12,6 +12,12 @@ rayon = "1.10.0"
 itertools = "0.13.0"
 serde = { version = "1.0.215", features = ["derive"] }
 serde_json = "1.0.133"
+num_cpus = "1.16.0"
+anyhow = "1.0.97"
+tracing = "0.1.41"
+tonic = "0.13.0"
+futures = "0.3.31"
+athena = { git = "https://github.com/ARelaxedScholar/Athena"}
 
 [lib]
 name = "rusty_evolution"
