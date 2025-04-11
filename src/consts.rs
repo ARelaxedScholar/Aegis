@@ -1,6 +1,5 @@
 pub const NUMBER_OF_OPTIMIZATION_OBJECTIVES: usize = 3;
 pub const PERTURBATION: f64 = 0.01;
-pub const FLOAT_COMPARISON_EPSILON: f64 = 1e-9;
 pub const LOG_RETURNS_MEANS: (f64, f64, f64, f64) = (
     5.32273662e-04,
     6.63425548e-05,
