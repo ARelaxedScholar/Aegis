@@ -18,6 +18,5 @@ mod consts;
 mod evolution;
 mod handlers;
 mod portfolio;
-mod sampling;
 
 // Actual Code
