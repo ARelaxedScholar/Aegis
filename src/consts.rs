@@ -1,3 +1,6 @@
+use once_cell::sync::Lazy;
+use std::env;
+
 pub const NUMBER_OF_OPTIMIZATION_OBJECTIVES: usize = 3;
 pub const PERTURBATION: f64 = 0.01;
 pub const LOG_RETURNS_MEANS: (f64, f64, f64, f64) = (
@@ -24,3 +27,5 @@ pub const LOG_RETURNS_COV: [f64; 4 * 4] = [
     -2.89021031e-05,
     2.58077479e-04,
 ];
+pub static ATHENA_ENDPOINT: Lazy<String> =
+    Lazy::new(|| env::var("ATHENA_ENDPOINT").expect("ATHENA_ENDPOINT must be set"));

@@ -1,14 +1,17 @@
-use crate::portfolio_evolution::{PopulationEvaluationResult, StandardEvolutionConfig};
+use crate::evolution::portfolio_evolution::{PopulationEvaluationResult, StandardEvolutionConfig};
+use aegis_athena_contracts::sampling::Sampler;
+use aegis_athena_contracts::simulation::simulation_service_client::SimulationServiceClient;
+use aegis_athena_contracts::simulation::SimulationBatchRequest;
+use aegis_athena_contracts::simulation::{self, SimulationScenario, WeightVector};
+use anyhow::anyhow;
 use anyhow::Result;
 use futures::stream::{self, StreamExt};
-use aegis_athena_contracts::simulation_service_client::SimulationServiceClient;
-use aegis_athena_contracts::{SimulationBatchRequest, EvolutionConfig};
 use std::sync::Arc;
 use std::time::SystemTime;
 use tonic::transport::Channel;
 
 pub async fn evaluate_population_performance_distributed(
-    population: Vec<simulation::Portfolio>,
+    population: &[Vec<f64>],
     config: &StandardEvolutionConfig,
     athena_endpoint: &str,
 ) -> anyhow::Result<PopulationEvaluationResult> {
@@ -40,17 +43,26 @@ pub async fn evaluate_population_performance_distributed(
     // 4) Build all the batch requests
     let requests: Vec<_> = (0..num_batches)
         .map(|i| {
-            let pop = Arc::clone(&population);
-            let blob = bincode::serialize(&*pop).unwrap();
             let cfg = Arc::clone(&config);
+
+            // Split the total number of simulations across independent batches
+            // (e.g. 1000 sims, 4 batches = 250 sims each)
+            // The last batch may be smaller if total_sims is not divisible by max_conc
+            // (e.g. 1000 sims, 3 batches = 334, 333, 333)
             let sims = if i + 1 == num_batches {
                 total_sims - batch_size * i
             } else {
                 batch_size
             };
             SimulationBatchRequest {
-                portfolios_blob: blob,
-                config: (*cfg).into(),
+                sampler: Some(cfg.sampler.clone().into()),
+                population: population
+                    .iter()
+                    .map(|p| WeightVector {
+                        weights: p.to_vec(),
+                    })
+                    .collect(),
+                config: Some((*cfg).clone().into()),
                 iterations: sims as i32,
                 seed: global_seed.wrapping_add(i as u64), // per‐batch seed
             }
@@ -65,7 +77,7 @@ pub async fn evaluate_population_performance_distributed(
                 c.run_batch(req)
                     .await
                     .map(|r| r.into_inner())
-                    .map_err(anyhow::anyhow)
+                    .map_err(|e| anyhow::anyhow!("{}", e))
             }
         })
         .buffer_unordered(max_conc)
@@ -79,7 +91,7 @@ pub async fn evaluate_population_performance_distributed(
     let mut sum_r = vec![0.0; n];
     let mut sum_v = vec![0.0; n];
     let mut sum_s = vec![0.0; n];
-    let mut last_scenario = Vec::new();
+    let mut last_scenario = SimulationScenario::default();
 
     for p in partials {
         for i in 0..n {
@@ -87,7 +99,10 @@ pub async fn evaluate_population_performance_distributed(
             sum_v[i] += p.sum_volatilities[i];
             sum_s[i] += p.sum_sharpes[i];
         }
-        last_scenario = p.last_scenario.returns.clone();
+        last_scenario = p
+            .last_scenario
+            .to_owned()
+            .ok_or_else(|| anyhow!("missing last_scenario"))?;
     }
 
     // 7) Build the final PopulationEvaluationResult
@@ -103,11 +118,21 @@ pub async fn evaluate_population_performance_distributed(
     let best_s = avg_s.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
     let pop_s = avg_s.iter().sum::<f64>() / (n as f64);
 
+    let unflatten_square = |flat: Vec<f64>, n: usize| -> Vec<Vec<f64>> {
+        assert_eq!(flat.len(), n * n, "flat.len() must be n*n");
+        flat.chunks(n) // iterator over &[f64] slices of length n
+            .map(|row| row.to_vec())
+            .collect() // Vec<Vec<f64>>
+    };
+
     Ok(PopulationEvaluationResult {
         average_returns: avg_r,
         average_volatilities: avg_v,
         average_sharpe_ratios: avg_s,
-        last_scenario_returns: last_scenario,
+        last_scenario_returns: unflatten_square(
+            last_scenario.returns,
+            config.assets_under_management,
+        ),
         best_return: best_r,
         population_average_return: pop_r,
         best_volatility: best_v,
@@ -115,4 +140,24 @@ pub async fn evaluate_population_performance_distributed(
         best_sharpe: best_s,
         population_average_sharpe: pop_s,
     })
+}
+
+impl From<StandardEvolutionConfig> for simulation::EvolutionConfig {
+    fn from(cfg: StandardEvolutionConfig) -> Self {
+        let periods_to_sample = match cfg.sampler {
+            Sampler::FactorModel {
+                periods_to_sample, ..
+            } => periods_to_sample,
+            Sampler::Normal {
+                periods_to_sample, ..
+            } => periods_to_sample,
+            _ => panic!("Unsupported sampler type"),
+        };
+        simulation::EvolutionConfig {
+            time_horizon_in_days: cfg.time_horizon_in_days as i32,
+            periods_to_sample: periods_to_sample as u32,
+            money_to_invest: cfg.money_to_invest,
+            risk_free_rate: cfg.risk_free_rate,
+        }
+    }
 }

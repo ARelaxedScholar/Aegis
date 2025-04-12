@@ -1,66 +1,48 @@
-use crate::{
-    evolution::portfolio_evolution::portfolio_evolution::{
-        memetic_evolve_portfolios, standard_evolve_portfolios, MemeticEvolutionConfig,
-        StandardEvolutionConfig,
-    },
-    portfolio_evolution::{EvolutionResult, StandardEvolutionConfig},
+use crate::evolution::portfolio_evolution::{
+    initialize_population, memetic_evolve_portfolios, standard_evolve_portfolios, EvolutionResult,
+    MemeticEvolutionConfig, StandardEvolutionConfig,
 };
-use axum::{extract::Json, http::StatusCode, response::IntoResponse};
-use serde::Deserialize;
-use utoipa::ToSchema;
 
-#[derive(Serialize, Deserialize, ToSchema)]
+use axum::{extract::Json, http::StatusCode};
+use serde::{Deserialize, Serialize};
+
+use crate::consts::ATHENA_ENDPOINT;
+
+#[derive(Serialize, Deserialize)]
 pub struct ErrorResponse {
     pub error: String,
 }
 
-#[utoipa::path(
-    post,
-    path = "/evolve/standard",
-    tag = "Evolution",
-    request_body = StandardEvolutionConfig,
-    responses(
-        (status = 200, description = "Evolution completed successfully", body = EvolutionResult),
-        (status = 400, description = "Bad request", body = ErrorResponse)
-    )
-)]
-async fn handle_standard_evolve(Json(payload): Json<StandardEvolutionConfig>) -> impl IntoResponse {
-    // Initialize or load population
+pub async fn handle_standard_evolve(
+    Json(payload): Json<StandardEvolutionConfig>,
+) -> Result<(StatusCode, Json<EvolutionResult>), (StatusCode, Json<ErrorResponse>)> {
+    // now `?` works, because our return type is `Result<…, (StatusCode, Json<ErrorResponse>)>`
     let population =
         initialize_population(payload.population_size, payload.assets_under_management)
             .map_err(|e| (StatusCode::BAD_REQUEST, Json(ErrorResponse { error: e })))?;
 
-    // Call the evolution
-    match standard_evolve_portfolios(payload, payload.athena_endpoint.clone(), population).await {
-        result => {
-            let res: EvolutionResult = result;
-            (StatusCode::OK, Json(res))
-        }
-    }
+    // call async evolution
+    let evolution_result =
+        standard_evolve_portfolios(payload, ATHENA_ENDPOINT.to_string(), population).await;
+
+    // wrap in Ok for the successful path
+    Ok((StatusCode::OK, Json(evolution_result)))
 }
 
-#[utoipa::path(
-    post,
-    path = "/evolve/memetic",
-    tag = "Evolution",
-    request_body = MemeticEvolutionConfig,
-    responses(
-        (status = 200, description = "Evolution completed successfully", body = EvolutionResult),
-        (status = 400, description = "Bad request", body = ErrorResponse)
-    )
-)]
-async fn handle_memetic_evolve(Json(payload): Json<MemeticEvolutionConfig>) -> impl IntoResponse {
+pub async fn handle_memetic_evolve(
+    Json(payload): Json<MemeticEvolutionConfig>,
+) -> Result<(StatusCode, Json<EvolutionResult>), (StatusCode, Json<ErrorResponse>)> {
+    // Now `?` works, returning Err(...) on failure
     let population = initialize_population(
         payload.base.population_size,
         payload.base.assets_under_management,
     )
     .map_err(|e| (StatusCode::BAD_REQUEST, Json(ErrorResponse { error: e })))?;
 
-    match memetic_evolve_portfolios(payload, payload.base.athena_endpoint.clone(), population).await
-    {
-        result => {
-            let res: EvolutionResult = result;
-            (StatusCode::OK, Json(res))
-        }
-    }
+    // Run async evolution logic
+    let evolution_result =
+        memetic_evolve_portfolios(payload, ATHENA_ENDPOINT.to_string(), population).await;
+
+    // Wrap the successful result in Ok(...)
+    Ok((StatusCode::OK, Json(evolution_result)))
 }
