@@ -118,8 +118,8 @@ pub async fn evaluate_population_performance_distributed(
     let best_s = avg_s.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
     let pop_s = avg_s.iter().sum::<f64>() / (n as f64);
 
-    let unflatten_square = |flat: Vec<f64>, n: usize| -> Vec<Vec<f64>> {
-        assert_eq!(flat.len(), n * n, "flat.len() must be n*n");
+    let unflatten_assets_returns = |flat: Vec<f64>, n: usize| -> Vec<Vec<f64>> {
+        assert_eq!(flat.len() % n, 0); // check that the n that is passed is correct
         flat.chunks(n) // iterator over &[f64] slices of length n
             .map(|row| row.to_vec())
             .collect() // Vec<Vec<f64>>
@@ -129,7 +129,7 @@ pub async fn evaluate_population_performance_distributed(
         average_returns: avg_r,
         average_volatilities: avg_v,
         average_sharpe_ratios: avg_s,
-        last_scenario_returns: unflatten_square(
+        last_scenario_returns: unflatten_assets_returns(
             last_scenario.returns,
             config.assets_under_management,
         ),
