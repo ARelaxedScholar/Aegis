@@ -1,32 +1,29 @@
-FROM rust:1.85 as builder
+# ─── Builder stage: compile Rust + pyo3 ────────────────────────────────
+FROM rust:1.85 AS builder
 WORKDIR /usr/src/aegis
 
-# Install protobuf-compiler
+# Install protoc & Python 3.11 dev headers
 RUN apt-get update \
-    &&  apt-get install -y \
-        protobuf-compiler \
-        python3-dev \
-        pkg-config \
-    && rm -rf /var/lib/apt/lists/*
+ && apt-get install -y \
+      protobuf-compiler \
+      python3.11-dev \
+      pkg-config \
+ && rm -rf /var/lib/apt/lists/*
 
-# Copy your source and build
 COPY . .
 RUN cargo build --release
 
-# 2) Runtime stage: minimal Debian image
-FROM debian:buster-slim
+# ─── Runtime stage: Bookworm slim with Python 3.11 runtime ────────────
+FROM debian:bookworm-slim
 
-
-# Build the application
-RUN cargo build --release
-
-# install CA certs for the gRPC client
+# CA certs + Python 3.11 runtime
 RUN apt-get update \
- && apt-get install -y ca-certificates \
+ && apt-get install -y \
+      ca-certificates \
+      docker.io \
+      python3-dev \
  && rm -rf /var/lib/apt/lists/*
 
-# Start a new slim debian container and copy the binary
-# from the builder stage
-FROM debian:buster-slim
-COPY --from=builder /usr/src/aegis/target/release/aegis-service /usr/local/bin/
-ENTRYPOINT ["aegis-service"]
+COPY --from=builder /usr/src/aegis/target/release/aegis /usr/local/bin/
+
+ENTRYPOINT ["aegis"]
