@@ -1,6 +1,6 @@
 use std::cmp::Ordering;
 
-use crate::athena_client::evaluate_population_performance_distributed;
+use crate::athena_client::evaluate_population_performance_in_grpc;
 use aegis_athena_contracts::common_consts::FLOAT_COMPARISON_EPSILON;
 use aegis_athena_contracts::{portfolio::Portfolio, sampling::Sampler};
 
@@ -329,7 +329,7 @@ pub async fn standard_evolve_portfolios(
     // EVOLUTION BABY!!!
     for generation in 0..generations {
         let eval_result =
-            evaluate_population_performance_distributed(&population, &config, &athena_endpoint)
+            evaluate_population_performance_in_grpc(&config, &population, &athena_endpoint)
                 .await
                 .expect("Failed to evaluate population");
 
@@ -337,7 +337,6 @@ pub async fn standard_evolve_portfolios(
         let simulation_average_returns = eval_result.average_returns; // Per-portfolio
         let simulation_average_volatilities = eval_result.average_volatilities;
         let simulation_average_sharpe_ratios = eval_result.average_sharpe_ratios;
-        let last_scenario_returns = eval_result.last_scenario_returns; // For memetic
 
         // --- Store generation metrics directly from eval_result ---
         best_average_return_per_generation[generation] = eval_result.best_return;
@@ -354,7 +353,7 @@ pub async fn standard_evolve_portfolios(
             &simulation_average_volatilities,
             &simulation_average_sharpe_ratios,
         );
-        let mut fronts = build_pareto_fronts(&portfolio_structs);
+        let mut fronts = build_pareto_fronts(portfolio_structs.as_slice());
         let breeding_pool: Vec<&Portfolio> = fronts.iter().flatten().collect();
         let mut next_generation: Vec<Vec<f64>> = Vec::new();
 
@@ -405,7 +404,7 @@ pub async fn standard_evolve_portfolios(
 
     // --- Final Evaluation After the Loop ---
     let final_eval_result =
-        evaluate_population_performance_distributed(&population, &config, &athena_endpoint)
+        evaluate_population_performance_in_grpc(&config, &population, &athena_endpoint)
             .await
             .expect("Failed to evaluate final population");
 
@@ -429,7 +428,7 @@ pub async fn standard_evolve_portfolios(
 
     // --- Prepare and return the EvolutionResult ---
     EvolutionResult {
-        pareto_fronts: build_pareto_fronts(&mut final_portfolio_structs),
+        pareto_fronts: build_pareto_fronts(final_portfolio_structs.as_slice()),
         // Generation history vectors were filled during the loop
         best_average_return_per_generation,
         average_return_per_generation,
@@ -490,19 +489,16 @@ pub async fn memetic_evolve_portfolios(
     // --- Main Evolution Loop ---
     for generation in 0..generations {
         // Evaluate the current population
-        let eval_result = evaluate_population_performance_distributed(
-            &population,
-            &config.base,
-            &athena_endpoint,
-        )
-        .await
-        .expect("Failed to evaluate population");
+        let eval_result =
+            evaluate_population_performance_in_grpc(&config.base, &population, &athena_endpoint)
+                .await
+                .expect("Failed to evaluate population");
 
         // --- Extract results ---
         let simulation_average_returns = eval_result.average_returns; // Per-portfolio
         let simulation_average_volatilities = eval_result.average_volatilities;
         let simulation_average_sharpe_ratios = eval_result.average_sharpe_ratios;
-        let last_scenario_returns = eval_result.last_scenario_returns; // For memetic
+        let last_scenario_returns = eval_result.last_scenario_returns; // For memetic step
 
         // --- Store generation metrics directly from eval_result ---
         best_average_return_per_generation[generation] = eval_result.best_return;
@@ -521,7 +517,7 @@ pub async fn memetic_evolve_portfolios(
         );
 
         // Non-dominated sort modifies ranks and crowding distances in place
-        let fronts = build_pareto_fronts(&portfolio_structs);
+        let fronts = build_pareto_fronts(portfolio_structs.as_slice());
 
         // --- The Memetic Part (Local Search) ---
         let mut next_generation_elites: Vec<Vec<f64>> = Vec::with_capacity(elite_population_size);
@@ -634,7 +630,7 @@ pub async fn memetic_evolve_portfolios(
 
     // --- Final Evaluation After the Loop ---
     let final_eval_result =
-        evaluate_population_performance_distributed(&population, &config.base, &athena_endpoint)
+        evaluate_population_performance_in_grpc(&config.base, &population, &athena_endpoint)
             .await
             .expect("Failed to evaluate final population");
 
@@ -658,7 +654,7 @@ pub async fn memetic_evolve_portfolios(
 
     // --- Prepare and return the EvolutionResult ---
     EvolutionResult {
-        pareto_fronts: build_pareto_fronts(&mut final_portfolio_structs),
+        pareto_fronts: build_pareto_fronts(final_portfolio_structs.as_slice()),
         // Generation history vectors were filled during the loop
         best_average_return_per_generation,
         average_return_per_generation,
@@ -893,7 +889,7 @@ fn proximal_step(weights: &Vec<f64>) -> Vec<f64> {
 
 /// Holds the results of evaluating a population over multiple simulations,
 /// including both per-portfolio averages and population-wide summary statistics.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PopulationEvaluationResult {
     // Per-Portfolio Averages
     /// Average annualized return for each portfolio in the evaluated population.
