@@ -1,8 +1,10 @@
-use std::cmp::Ordering;
-
 use crate::athena_client::evaluate_population_performance_in_grpc;
+use crate::k8s_job::evaluate_generation_in_k8s_job;
 use aegis_athena_contracts::common_consts::FLOAT_COMPARISON_EPSILON;
+use aegis_athena_contracts::common_portfolio_evolution_ds::compute_portfolio_performance;
+use aegis_athena_contracts::common_portfolio_evolution_ds::PortfolioPerformance;
 use aegis_athena_contracts::{portfolio::Portfolio, sampling::Sampler};
+use std::cmp::Ordering;
 
 use crate::consts::{NUMBER_OF_OPTIMIZATION_OBJECTIVES, PERTURBATION};
 use itertools::izip;
@@ -12,6 +14,9 @@ use rand::prelude::*;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use tracing::warn;
+
+use futures::{future::BoxFuture, FutureExt};
+use std::sync::Arc;
 
 fn default_max_concurrency() -> usize {
     num_cpus::get()
@@ -228,6 +233,7 @@ pub struct StandardEvolutionConfig {
     pub global_seed: Option<u64>,
     #[serde(default = "default_max_concurrency")]
     pub max_concurrency: usize,
+    pub sim_runner: SimRunner,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -246,6 +252,8 @@ pub struct MemeticEvolutionConfig {
     pub base: StandardEvolutionConfig,
     pub memetic: MemeticParams,
 }
+
+//
 
 /// Contains summary statistics for the final population after evolution.
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -276,6 +284,63 @@ pub struct EvolutionResult {
     pub final_summary: FinalPopulationSummary,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub enum SimRunner {
+    Local,
+    AthenaK8sJob,
+    AthenaGrpc,
+}
+
+pub fn make_evaluator(
+    sim_runner: SimRunner,
+    config: StandardEvolutionConfig,
+    athena_endpoint: String,
+) -> impl Fn(&[Vec<f64>]) -> BoxFuture<'static, anyhow::Result<PopulationEvaluationResult>> + Clone
+{
+    // wrap in Arcs so we can cheaply clone into each branch
+    let cfg = Arc::new(config);
+    let ep = Arc::new(athena_endpoint);
+    let runner = Arc::new(sim_runner);
+
+    move |population: &[Vec<f64>]| {
+        // First clone everything we need *owned* into this particular call:
+        let cfg = cfg.clone();
+        let ep = ep.clone();
+        let runner = runner.clone();
+        // clone the population slice into an owned Vec<Vec<f64>>
+        let pop_owned = population.to_owned();
+
+        // dispatch on runner
+        match &*runner {
+            SimRunner::Local => {
+                // synchronous path
+                async move {
+                    let res = evaluate_population_performance_local(&cfg, &pop_owned);
+                    Ok(res)
+                }
+                .boxed()
+            }
+            SimRunner::AthenaK8sJob => {
+                // async path against Kubernetes
+                async move {
+                    let res = evaluate_generation_in_k8s_job(&cfg, &pop_owned).await?;
+                    Ok(res)
+                }
+                .boxed()
+            }
+            SimRunner::AthenaGrpc => {
+                // async path against gRPC service
+                async move {
+                    let res =
+                        evaluate_population_performance_in_grpc(&cfg, &pop_owned, &ep).await?;
+                    Ok(res)
+                }
+                .boxed()
+            }
+        }
+    }
+}
+
 // Algo Logic
 // 1. Generate a bunch of portfolio for the first batch based on a parameter passed (initial training size)
 // 2. Sample based on the provided length using whichever method was specified by the user
@@ -298,6 +363,12 @@ pub async fn standard_evolve_portfolios(
     let simulations_per_generation = config.simulations_per_generation;
 
     let elite_population_size = ((population_size as f64) * config.elitism_rate) as usize;
+
+    // Create the evaluator
+    let runner = config.sim_runner.clone();
+    let cfg = config.clone();
+    let population_evaluator = make_evaluator(runner, cfg, athena_endpoint.clone());
+
     // Ensure elite size is reasonable
     if elite_population_size == 0 && config.elitism_rate > 0.0 {
         warn!(
@@ -328,10 +399,9 @@ pub async fn standard_evolve_portfolios(
 
     // EVOLUTION BABY!!!
     for generation in 0..generations {
-        let eval_result =
-            evaluate_population_performance_in_grpc(&config, &population, &athena_endpoint)
-                .await
-                .expect("Failed to evaluate population");
+        let eval_result = population_evaluator(&population)
+            .await
+            .expect("Failed to evaluate population");
 
         // --- Extract results ---
         let simulation_average_returns = eval_result.average_returns; // Per-portfolio
@@ -403,10 +473,9 @@ pub async fn standard_evolve_portfolios(
     }
 
     // --- Final Evaluation After the Loop ---
-    let final_eval_result =
-        evaluate_population_performance_in_grpc(&config, &population, &athena_endpoint)
-            .await
-            .expect("Failed to evaluate final population");
+    let final_eval_result = population_evaluator(&population)
+        .await
+        .expect("Failed to evaluate final population");
 
     // Create final portfolio structs using the final weights and *final* evaluation results
     let mut final_portfolio_structs = turn_weights_into_portfolios(
@@ -465,6 +534,9 @@ pub async fn memetic_evolve_portfolios(
     }
 
     let mut population: Vec<Vec<f64>> = population;
+    let runner = config.base.sim_runner.clone();
+    let cfg = config.base.clone();
+    let population_evaluator = make_evaluator(runner, cfg, athena_endpoint.clone());
 
     // Add new config params needed for memetic part
     let proximal_steps = config.memetic.proximal_descent_steps;
@@ -489,10 +561,9 @@ pub async fn memetic_evolve_portfolios(
     // --- Main Evolution Loop ---
     for generation in 0..generations {
         // Evaluate the current population
-        let eval_result =
-            evaluate_population_performance_in_grpc(&config.base, &population, &athena_endpoint)
-                .await
-                .expect("Failed to evaluate population");
+        let eval_result = population_evaluator(&population)
+            .await
+            .expect("Failed to evaluate population");
 
         // --- Extract results ---
         let simulation_average_returns = eval_result.average_returns; // Per-portfolio
@@ -629,10 +700,9 @@ pub async fn memetic_evolve_portfolios(
     } // End of generation loop
 
     // --- Final Evaluation After the Loop ---
-    let final_eval_result =
-        evaluate_population_performance_in_grpc(&config.base, &population, &athena_endpoint)
-            .await
-            .expect("Failed to evaluate final population");
+    let final_eval_result = population_evaluator(&population)
+        .await
+        .expect("Failed to evaluate final population");
 
     // Create final portfolio structs using the final weights and *final* evaluation results
     let mut final_portfolio_structs = turn_weights_into_portfolios(
@@ -1006,15 +1076,133 @@ fn compute_portfolio_gradient(
     gradient
 }
 
-#[derive(Debug, Clone)]
-struct PortfolioPerformance {
-    portfolio_returns: Vec<f64>,
-    annualized_return: f64,
-    percent_annualized_volatility: f64,
-    sharpe_ratio: f64,
+/// Evaluates the performance of a given population of portfolios over multiple simulations.
+///
+/// Calculates per-portfolio average metrics and population-wide summary statistics.
+///
+/// # Arguments
+/// * `population`: A slice of weight vectors representing the portfolios to evaluate.
+/// * `config`: The base configuration containing simulation parameters and the sampler.
+///
+/// # Returns
+/// A `PopulationEvaluationResult` struct. Returns default/empty values if the input population is empty.
+fn evaluate_population_performance_local(
+    config: &StandardEvolutionConfig,
+    population: &[Vec<f64>],
+) -> PopulationEvaluationResult {
+    let population_size = population.len();
+    if population_size == 0 {
+        return PopulationEvaluationResult {
+            average_returns: vec![],
+            average_volatilities: vec![],
+            average_sharpe_ratios: vec![],
+            last_scenario_returns: vec![],
+            best_return: f64::NEG_INFINITY,
+            population_average_return: 0.0,
+            best_volatility: f64::INFINITY,
+            population_average_volatility: 0.0,
+            best_sharpe: f64::NEG_INFINITY,
+            population_average_sharpe: 0.0,
+        };
+    }
+
+    let simulations_per_generation = config.simulations_per_generation;
+
+    // Initialize accumulators
+    let mut accumulated_returns = vec![0.0; population_size];
+    let mut accumulated_volatilities = vec![0.0; population_size];
+    let mut accumulated_sharpe_ratios = vec![0.0; population_size];
+    let mut last_scenario_returns: Vec<Vec<f64>> = vec![];
+    let mut cfg_clone = config.clone();
+
+    // --- Simulation Loop ---
+    for i in 0..simulations_per_generation {
+        let scenario_returns = cfg_clone.sampler.sample_returns();
+        if i == simulations_per_generation - 1 {
+            last_scenario_returns = scenario_returns.clone();
+        }
+
+        let performance_metrics_in_scenario: Vec<(f64, f64, f64)> = population
+            .par_iter()
+            .map(|portfolio_weights| {
+                let performance = compute_portfolio_performance(
+                    &scenario_returns,
+                    portfolio_weights,
+                    config.money_to_invest,
+                    config.risk_free_rate,
+                    config.time_horizon_in_days as f64,
+                );
+                (
+                    performance.annualized_return,
+                    performance.percent_annualized_volatility,
+                    performance.sharpe_ratio,
+                )
+            })
+            .collect();
+
+        for (idx, (ret, vol, sharpe)) in performance_metrics_in_scenario.iter().enumerate() {
+            accumulated_returns[idx] += ret;
+            accumulated_volatilities[idx] += vol;
+            accumulated_sharpe_ratios[idx] += sharpe;
+        }
+    } // --- End of Simulation Loop ---
+
+    // --- Calculate Per-Portfolio Averages ---
+    let sim_count_f64 = simulations_per_generation as f64;
+    // These vectors hold the average performance for each *individual* portfolio
+    let average_returns: Vec<f64> = accumulated_returns
+        .par_iter()
+        .map(|&sum| sum / sim_count_f64)
+        .collect();
+    let average_volatilities: Vec<f64> = accumulated_volatilities
+        .par_iter()
+        .map(|&sum| sum / sim_count_f64)
+        .collect();
+    let average_sharpe_ratios: Vec<f64> = accumulated_sharpe_ratios
+        .par_iter()
+        .map(|&sum| sum / sim_count_f64)
+        .collect();
+
+    // --- Calculate Population-Wide Summary Statistics ---
+    let population_size_f64 = population_size as f64;
+
+    // Use the calculated per-portfolio averages to get population stats
+    let best_return = average_returns
+        .par_iter()
+        .fold(|| f64::NEG_INFINITY, |a, &b| a.max(b))
+        .reduce(|| f64::NEG_INFINITY, |a, b| a.max(b));
+    let population_average_return = average_returns.par_iter().sum::<f64>() / population_size_f64;
+
+    let best_volatility = average_volatilities
+        .par_iter()
+        .fold(|| f64::INFINITY, |a, &b| a.min(b))
+        .reduce(|| f64::INFINITY, |a, b| a.min(b));
+    let population_average_volatility =
+        average_volatilities.par_iter().sum::<f64>() / population_size_f64;
+
+    let best_sharpe = average_sharpe_ratios
+        .par_iter()
+        .fold(|| f64::NEG_INFINITY, |a, &b| a.max(b))
+        .reduce(|| f64::NEG_INFINITY, |a, b| a.max(b));
+    let population_average_sharpe =
+        average_sharpe_ratios.par_iter().sum::<f64>() / population_size_f64;
+
+    // --- Return Results ---
+    PopulationEvaluationResult {
+        average_returns, // Per-portfolio averages
+        average_volatilities,
+        average_sharpe_ratios,
+        last_scenario_returns, // Data from last sim run
+        best_return,           // Population summary stats
+        population_average_return,
+        best_volatility,
+        population_average_volatility,
+        best_sharpe,
+        population_average_sharpe,
+    }
 }
 
-fn compute_portfolio_performance(
+fn compute_portfolio_performance_local(
     returns: &[Vec<f64>],
     weights: &[f64],
     money_to_invest: f64,

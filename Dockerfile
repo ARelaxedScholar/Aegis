@@ -1,3 +1,4 @@
+# syntax = docker/dockerfile:1.4
 # ─── Builder stage: compile Rust + pyo3 ────────────────────────────────
 FROM rust:1.85 AS builder
 WORKDIR /usr/src/aegis
@@ -11,7 +12,8 @@ RUN apt-get update \
  && rm -rf /var/lib/apt/lists/*
 
 COPY . .
-RUN cargo build --release
+RUN  --mount=type=ssh \
+     cargo build --release
 
 # ─── Runtime stage: Bookworm slim with Python 3.11 runtime ────────────
 FROM debian:bookworm-slim
@@ -24,6 +26,6 @@ RUN apt-get update \
       python3-dev \
  && rm -rf /var/lib/apt/lists/*
 
-COPY --from=builder /usr/src/aegis/target/release/aegis /usr/local/bin/
+COPY --from=builder /usr/src/aegis/target/release/aegis-bin /usr/local/bin/
 
 ENTRYPOINT ["aegis"]
