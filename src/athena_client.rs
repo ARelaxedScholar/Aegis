@@ -10,12 +10,12 @@ use std::sync::Arc;
 use std::time::SystemTime;
 use tonic::transport::Channel;
 
-pub async fn evaluate_population_performance_distributed(
-    population: &[Vec<f64>],
+pub async fn evaluate_population_performance_in_grpc(
     config: &StandardEvolutionConfig,
+    population: &[Vec<f64>],
     athena_endpoint: &str,
 ) -> anyhow::Result<PopulationEvaluationResult> {
-    // 0) Pick a reproducible or fresh seed per generation
+    // Pick a reproducible or fresh seed per generation
     let global_seed: u64 = config.global_seed.unwrap_or_else(|| {
         SystemTime::now()
             .duration_since(SystemTime::UNIX_EPOCH)
@@ -23,15 +23,15 @@ pub async fn evaluate_population_performance_distributed(
             .as_secs()
     });
 
-    // 1) Total sims and concurrency
+    // Total sims and concurrency
     let total_sims = config.simulations_per_generation;
     let max_conc = config.max_concurrency;
 
-    // 2) Decide batch size & number of batches
+    // Decide batch size & number of batches
     let batch_size = (total_sims + max_conc - 1) / max_conc;
     let num_batches = (total_sims + batch_size - 1) / batch_size;
 
-    // 3) Prepare a single gRPC client to the Athena Service
+    // Prepare a single gRPC client to the Athena Service
     let channel = Channel::from_shared(athena_endpoint.to_string())?
         .connect()
         .await?;
@@ -40,7 +40,7 @@ pub async fn evaluate_population_performance_distributed(
     let population = Arc::new(population);
     let config = Arc::new(config.clone());
 
-    // 4) Build all the batch requests
+    // Build all the batch requests
     let requests: Vec<_> = (0..num_batches)
         .map(|i| {
             let cfg = Arc::clone(&config);
@@ -69,7 +69,7 @@ pub async fn evaluate_population_performance_distributed(
         })
         .collect();
 
-    // 5) Run them with up to max_concurrency in flight
+    // Run them with up to max_concurrency in flight
     let partials = stream::iter(requests)
         .map(|req| {
             let mut c = client.clone();
@@ -86,7 +86,7 @@ pub async fn evaluate_population_performance_distributed(
         .into_iter()
         .collect::<Result<Vec<_>, _>>()?;
 
-    // 6) Aggregate partial sums
+    // Aggregate partial sums
     let n = population.len();
     let mut sum_r = vec![0.0; n];
     let mut sum_v = vec![0.0; n];
@@ -105,7 +105,7 @@ pub async fn evaluate_population_performance_distributed(
             .ok_or_else(|| anyhow!("missing last_scenario"))?;
     }
 
-    // 7) Build the final PopulationEvaluationResult
+    // Build the final PopulationEvaluationResult
     let total = total_sims as f64;
     let avg_r: Vec<f64> = sum_r.iter().map(|&x| x / total).collect();
     let avg_v: Vec<f64> = sum_v.iter().map(|&x| x / total).collect();
