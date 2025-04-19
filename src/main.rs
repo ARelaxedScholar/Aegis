@@ -1,21 +1,18 @@
-use axum::{routing::post, Router};
 use dotenv::dotenv;
-use handlers::{handle_memetic_evolve, handle_standard_evolve};
-use http::header::HeaderName;
+
+use crate::web_app::build_app;
 use std::{env, net::SocketAddr};
-use tower_http::{
-    compression::CompressionLayer, cors::CorsLayer, request_id::MakeRequestUuid,
-    request_id::SetRequestIdLayer, trace::TraceLayer,
-};
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
 mod athena_client;
 mod consts;
 mod evolution;
 mod handlers;
+mod k8s_job;
+mod web_app;
 
 #[tokio::main]
-async fn main() {
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
     dotenv().ok();
 
     // Logging
@@ -33,26 +30,12 @@ async fn main() {
     let addr = SocketAddr::from((host.parse::<std::net::IpAddr>().unwrap(), port));
     println!("Server starting on {}", addr);
     tracing::info!("Server starting on {}", addr);
-    let x_request_id = HeaderName::from_static("x-request-id");
+
     // Router
-    let app = Router::new()
-        .route("/evolve/standard", post(handle_standard_evolve))
-        .route("/evolve/memetic", post(handle_memetic_evolve))
-        .layer(
-            tower::ServiceBuilder::new()
-                .layer(SetRequestIdLayer::new(
-                    x_request_id.clone(),
-                    MakeRequestUuid,
-                ))
-                .layer(TraceLayer::new_for_http())
-                .layer(CompressionLayer::new())
-                .layer(CorsLayer::permissive())
-                .into_inner(),
-        );
+    let app = build_app();
 
     // Run server
     let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
-    axum::serve(listener, app.into_make_service())
-        .await
-        .unwrap();
+    axum::serve(listener, app.into_make_service()).await?;
+    Ok(())
 }
