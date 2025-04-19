@@ -1,0 +1,87 @@
+syntax = "proto3";
+
+package simulation;
+
+// The SimulationService with a batch processing method.
+service SimulationService {
+  // RunBatch distributes a batch of simulation tasks, returning aggregated performance metrics.
+  rpc RunBatch (SimulationBatchRequest) returns (SimulationBatchResult);
+}
+
+// We only send the parameters needed to rebuild a Sampler
+message SamplerConfig {
+  oneof kind {
+    FactorModelConfig factor_model = 1;
+    NormalConfig      normal       = 2;
+    SeriesGanConfig   series_gan   = 3;
+  }
+}
+
+// All the data needed to reconstruct the minimal FactorModel sampler
+message FactorModelConfig {
+  repeated double mu_assets              = 1;
+  repeated double covariance_assets      = 2;  // flattened
+}
+
+// Data for the “normal” sampler
+message NormalConfig {
+  repeated double means = 1;
+  repeated double cov    = 2;  // flattened covariance matrix
+}
+
+// Data for the GAN sampler
+message SeriesGanConfig {
+  uint32 periods = 1;
+}
+
+message WeightVector {
+  // Each portfolio is just a vector of weights (length = number of assets)
+  repeated double weights = 1;
+}
+
+// Updated to accept a vector of weights.
+message SimulationBatchRequest {
+  // Which sampler to use
+  SamplerConfig sampler       = 1;
+
+  // The set of portfolios (each just a weight vector)
+  repeated WeightVector population = 2;
+
+  // Evolution parameters
+  EvolutionConfig config      = 3;
+
+  // How many Monte‑Carlo iterations per portfolio
+  int32  iterations           = 4;
+
+  // RNG seed for reproducibility
+  uint64 seed                 = 5;
+}
+
+// Simulation configuration carrying only the parameters needed by the simulation server.
+message EvolutionConfig {
+  // The time horizon of the simulation in days.
+  int32 time_horizon_in_days = 1;
+  // period to sample
+  uint32 periods_to_sample = 2;
+  // The amount of money that is available to invest.
+  double money_to_invest = 3;
+  // The risk free rate used for computing performance metrics.
+  double risk_free_rate = 4;
+}
+
+// The batch result aggregates metrics over all iterations for each portfolio.
+message SimulationBatchResult {
+  // Aggregated sum of returns for each portfolio.
+  repeated double sum_returns = 1;
+  // Aggregated sum of volatilities for each portfolio.
+  repeated double sum_volatilities = 2;
+  // Aggregated sum of Sharpe ratios for each portfolio.
+  repeated double sum_sharpes = 3;
+  // The market scenario (i.e. series of returns) from the last simulation.
+  SimulationScenario last_scenario = 4;
+}
+
+// A market scenario, represented as a time series of returns.
+message SimulationScenario {
+  repeated double returns = 1;
+}
