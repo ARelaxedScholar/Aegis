@@ -26,4 +26,4 @@ RUN apt-get update \
 
 COPY --from=builder /usr/src/aegis/target/release/aegis-bin /usr/local/bin/
 
-ENTRYPOINT ["aegis"]
+ENTRYPOINT ["aegis-bin"]
