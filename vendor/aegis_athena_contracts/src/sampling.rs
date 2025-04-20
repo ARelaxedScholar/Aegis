@@ -124,7 +124,7 @@ impl Sampler {
         let mut rng = ChaCha20Rng::seed_from_u64(seed);
 
         // build factor model...
-        let small_returns = 0.001;
+        let small_returns = 0.0002;
         let mu_factors = vec![small_returns; number_of_factors];
         let covariance_factors = Self::generate_covariance_matrix(number_of_factors)?;
 
@@ -136,7 +136,7 @@ impl Sampler {
             }
         }
 
-        let idiosyncratic_variances = vec![0.01; assets_under_management];
+        let idiosyncratic_variances = vec![0.0001; assets_under_management];
         let mut mu_assets = vec![0.0; assets_under_management];
         for i in 0..assets_under_management {
             mu_assets[i] = loadings[i]
@@ -271,7 +271,7 @@ impl Sampler {
         }
         let mut rng = ChaCha20Rng::from_entropy();
 
-        let uniform = Uniform::new(0.01, 0.2);
+        let uniform = Uniform::new(1e-4, 1e-3);
 
         let mut m = vec![vec![0.0; number_of_factors]; number_of_factors];
         for i in 0..number_of_factors {

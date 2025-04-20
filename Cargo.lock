@@ -57,7 +57,7 @@ dependencies = [
 [[package]]
 name = "aegis_athena_contracts"
 version = "0.1.0"
-source = "git+ssh://git@github.com/ARelaxedScholar/Aegis-Athena-Contracts.git#f64ef83e988aafdb138dfc86648b75a2f9e09c76"
+source = "git+ssh://git@github.com/ARelaxedScholar/Aegis-Athena-Contracts.git#3c63951d61510c22cabaf95c7fcf0e0bde13c0d3"
 dependencies = [
  "bincode",
  "log",

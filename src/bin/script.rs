@@ -16,7 +16,7 @@ use tokio::task;
 async fn main() -> anyhow::Result<()> {
     // Build your base config; max_concurrency is unused for Local.
     let base_config = StandardEvolutionConfig {
-        time_horizon_in_days: 5,
+        time_horizon_in_days: 252,
         generations: 10,
         population_size: 2,
         simulations_per_generation: 1_00, // small for testing
@@ -26,7 +26,7 @@ async fn main() -> anyhow::Result<()> {
         elitism_rate: 0.05,
         mutation_rate: 0.05,
         tournament_size: 3,
-        sampler: Sampler::factor_model_synthetic(2, 5, 100, Some(42)).expect("Failed to get sampler"),
+        sampler: Sampler::factor_model_synthetic(2, 5, 252, Some(42)).expect("Failed to get sampler"),
         generation_check_interval: 10,
         global_seed: Some(42),
         max_concurrency: 0,     // not used by Local
