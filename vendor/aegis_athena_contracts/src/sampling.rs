@@ -128,13 +128,6 @@ impl Sampler {
         let mu_factors = vec![small_returns; number_of_factors];
         let covariance_factors = Self::generate_covariance_matrix(number_of_factors)?;
 
-        let throwaway = MultivariateNormal::new(
-            mu_factors.clone(),
-            covariance_factors.clone().into_iter().flatten().collect(),
-        )
-        .map_err(|e| format!("MVN init failed: {}", e))?;
-        let factor_returns = throwaway.sample(&mut rng);
-
         let uniform = rand::distributions::Uniform::new(0.5, 1.5);
         let mut loadings = vec![vec![0.0; number_of_factors]; assets_under_management];
         for i in 0..assets_under_management {
@@ -148,8 +141,8 @@ impl Sampler {
         for i in 0..assets_under_management {
             mu_assets[i] = loadings[i]
                 .iter()
-                .zip(factor_returns.iter())
-                .map(|(l, f)| l * f)
+                .zip(mu_factors.iter())
+                .map(|(l, &f_mu)| l * f_mu)
                 .sum();
         }
 

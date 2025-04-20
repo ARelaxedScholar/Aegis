@@ -16,22 +16,28 @@ use tokio::task;
 async fn main() -> anyhow::Result<()> {
     // Build your base config; max_concurrency is unused for Local.
     let base_config = StandardEvolutionConfig {
-        time_horizon_in_days: 100,
+        time_horizon_in_days: 5,
         generations: 10,
-        population_size: 100,
-        simulations_per_generation: 1_000, // small for testing
-        assets_under_management: 50,
+        population_size: 2,
+        simulations_per_generation: 1_00, // small for testing
+        assets_under_management: 2,
         money_to_invest: 1_000_000.0,
         risk_free_rate: 0.01,
         elitism_rate: 0.05,
         mutation_rate: 0.05,
         tournament_size: 3,
-        sampler: Sampler::factor_model_synthetic(50, 5, 100, Some(42)).expect("Failed to get sampler"),
+        sampler: Sampler::factor_model_synthetic(2, 5, 100, Some(42)).expect("Failed to get sampler"),
         generation_check_interval: 10,
         global_seed: Some(42),
         max_concurrency: 0,     // not used by Local
         sim_runner: SimRunner::Local,
     };
+    if let Sampler::FactorModel{ref mu_assets, ..} = base_config.sampler {
+    println!("This is the mu_assets: {:?}", mu_assets);
+    } else {
+    	panic!("We'll never get here");
+    }
+    
 
     // Launcher: 5 threads max, channel to collect back steps + results.
     let pool = ThreadPool::new(5);
