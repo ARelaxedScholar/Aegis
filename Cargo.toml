@@ -44,5 +44,12 @@ crate-type = ["cdylib", "rlib"]
 name = "aegis-bin"
 path = "src/main.rs"
 
+[source.crates-io]
+replace-with = "vendored-sources"
 
+[source."git+ssh://git@github.com/ARelaxedScholar/Aegis-Athena-Contracts.git"]
+git = "ssh://git@github.com/ARelaxedScholar/Aegis-Athena-Contracts.git"
+replace-with = "vendored-sources"
 
+[source.vendored-sources]
+directory = "vendor"
