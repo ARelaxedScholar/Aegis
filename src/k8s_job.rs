@@ -43,7 +43,7 @@ pub async fn evaluate_generation_in_k8s_job(
     config: &StandardEvolutionConfig,
     population: &[Vec<f64>],
 ) -> Result<PopulationEvaluationResult> {
-    // Turn your internal Sampler into the Serde‐friendly DTO
+    // Turn internal Sampler into the Serde‐friendly DTO
     let serde_sampler = SerdeSampler::from(config.sampler.clone());
 
     // Build the JSON payload the runner expects

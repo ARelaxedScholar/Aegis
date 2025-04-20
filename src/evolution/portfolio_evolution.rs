@@ -857,7 +857,7 @@ fn mutate(weights: &mut Vec<f64>, mutation_rate: f64) {
 // The idea is to push a solution in the solution it already excels in
 // This should ideally lead to a more diverse Pareto Front, and more interesting solutions
 #[derive(PartialEq, Debug, Clone, Serialize, Deserialize, Copy)]
-enum Objective {
+pub enum Objective {
     AnnualizedReturns,
     SharpeRatio,
     Volatility,

@@ -1,21 +1,21 @@
 use pyo3::prelude::*;
 
 use crate::sampling::Sampler as RustSampler;
-use crate::simulation::SamplerConfig;
 use crate::simulation::sampler_config::Kind;
+use crate::simulation::SamplerConfig;
 use crate::simulation::{FactorModelConfig, NormalConfig, SeriesGanConfig};
 use nalgebra::Dyn;
 use rand::RngCore;
-use rand::{Rng, SeedableRng, distributions::Distribution, rngs::OsRng};
-use rand_chacha::ChaCha20Rng; 
+use rand::{distributions::Distribution, rngs::OsRng, Rng, SeedableRng};
 use rand_chacha::rand_core::block;
+use rand_chacha::ChaCha20Rng;
 use rand_distr::Uniform;
 use serde::de::{self, Error as DeError};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use serde_with::DeserializeFromStr;
 use statrs::distribution::MultivariateNormal;
 use statrs::statistics::{MeanN, VarianceN};
 use std::convert::{TryFrom, TryInto};
-use serde_with::DeserializeFromStr;
 // ---- Quick setup for the Serialization logic
 const CURRENT_SERIALIZER_VERSION: u32 = 1;
 fn default_version() -> u32 {
@@ -153,12 +153,31 @@ impl Sampler {
                 .sum();
         }
 
-        let covariance_assets = Self::compute_asset_covariance(
+        let mut covariance_assets = Self::compute_asset_covariance(
             &loadings,
             &covariance_factors,
             &idiosyncratic_variances,
         )?;
 
+        // Enforce exact symmetry up to machine‐precision:
+        let n = covariance_assets.len();
+        for i in 0..n {
+            for j in (i + 1)..n {
+                let avg = 0.5 * (covariance_assets[i][j] + covariance_assets[j][i]);
+                covariance_assets[i][j] = avg;
+                covariance_assets[j][i] = avg;
+            }
+        }
+
+        // Add a tiny “jitter” to the diagonal so it’s numerically positive‑definite:
+        for i in 0..n {
+            covariance_assets[i][i] += 1e-8;
+        }
+
+        // now flatten in row‑major order:
+        let flat_cov: Vec<f64> = covariance_assets.iter().flat_map(|row| row.iter().cloned()).collect();
+
+        // Pass to distrib
         let normal_distribution = MultivariateNormal::new(
             mu_assets.clone(),
             covariance_assets.clone().into_iter().flatten().collect(),
@@ -405,7 +424,6 @@ impl From<RustSampler> for SamplerConfig {
     }
 }
 
-
 mod u128_string {
     use serde::{self, Deserialize, Deserializer, Serializer};
 
@@ -427,7 +445,6 @@ mod u128_string {
             .map_err(|e| serde::de::Error::custom(format!("invalid u128: {}", e)))
     }
 }
-
 
 // ---- This is the the serializable Sampler to pass around
 #[derive(Serialize, Deserialize)]
@@ -685,5 +702,10 @@ mod tests {
     #[test]
     fn test_generate_covariance_matrix_zero() {
         assert!(Sampler::generate_covariance_matrix(0).is_err());
+    }
+
+    fn test_synthetica_factor_model_function() {
+        let number_of_factors = 5;
+        let result = Sampler::factor_model_synthetic();
     }
 }
