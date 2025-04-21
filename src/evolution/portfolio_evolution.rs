@@ -562,6 +562,7 @@ pub async fn memetic_evolve_portfolios(
     // --- Main Evolution Loop ---
     for generation in 0..generations {
         println!("Generation {} starting.", generation + 1);
+        io::stdout().flush().unwrap();
         // Evaluate the current population
         let eval_result = population_evaluator(&population)
             .await
