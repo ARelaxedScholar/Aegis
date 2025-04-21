@@ -89,17 +89,34 @@ pub async fn evaluate_generation_in_k8s_job(
                     ..Default::default()
                 }),
                 spec: Some(PodSpec {
+		    volumes: Some(vec![
+			Volume {
+				name: "workdir".into(),
+				empty_dir: Some(EmptyDirVolumeSource {}),
+				..Default::default()
+				}
+			]),
+			init_containers: Some(vec![
+				Container {
+				name: "write-payload".into(),
+				image: Some("busybox".into()),
+				command: Some(vec![
+				"sh".into(), "-c".into(), format!("echo '{}' > /workdir/payload.json", payload),]),
+				volume_mounts: Some(vec![
+					name: "workdir".into(),
+					mount_path: "/workdir".into(),
+					..Default::default()}]),
+..Default::default()}
+			]),
+                    service_account_name: Some("job-runner-sa".into()),
                     restart_policy: Some("Never".into()),
                     containers: vec![ Container {
-                                            name:  "athena-runner".into(),
+                                            name: "athena-runner".into(),
                                             image: Some(image.clone()),
-                                            env: Some(vec![
-                                                // your existing PAYLOAD_JSON
-                                                EnvVar {
-                                                    name:  "PAYLOAD_JSON".into(),
-                                                    value: Some(payload.clone()),
-                                                    ..Default::default()
-                                                },
+                                            args: Some(vec![
+						// Injecting the path to payload
+                                                "--payload-path".into(),
+						"/workdir/payload.json".into(),
                                                 EnvVar {
                                                     name: "COMPLETIONS".into(),
                                                     value: Some(config.max_concurrency.to_string()), // matches spec.completions
@@ -118,6 +135,13 @@ pub async fn evaluate_generation_in_k8s_job(
                                                     ..Default::default()
                                                 },
                                             ]),
+					    volume_mounts: Some(vec![
+						VolumeMount {
+							name: "workdir".into(),
+							mount_path: "workdir".into(),
+							..Default::default()
+						}
+						]),
                                             ..Default::default()
                                         }],
                     ..Default::default()
