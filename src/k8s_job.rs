@@ -70,7 +70,7 @@ pub async fn evaluate_generation_in_k8s_job(
                     // scratch volume
                     volumes: Some(vec![Volume {
                         name: "workdir".into(),
-                        empty_dir: Some(EmptyDirVolumeSource {}),
+                        empty_dir: Some(EmptyDirVolumeSource {..Default::default()}),
                         ..Default::default()
                     }]),
                     // init container writes payload
