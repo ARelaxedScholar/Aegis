@@ -5,6 +5,7 @@ use aegis_athena_contracts::common_portfolio_evolution_ds::compute_portfolio_per
 use aegis_athena_contracts::common_portfolio_evolution_ds::PortfolioPerformance;
 use aegis_athena_contracts::{portfolio::Portfolio, sampling::Sampler};
 use std::cmp::Ordering;
+use std::io::{self, Write};
 
 use crate::consts::{NUMBER_OF_OPTIMIZATION_OBJECTIVES, PERTURBATION};
 use itertools::izip;
