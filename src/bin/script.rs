@@ -23,7 +23,7 @@ async fn main() -> anyhow::Result<()> {
         assets_under_management,
         money_to_invest: 1_000_000.0,
         risk_free_rate: 0.01,
-        elitism_rate: 0.05,
+        elitism_rate: 0.1,
         mutation_rate: 0.1,
         tournament_size: 3,
         sampler: Sampler::factor_model_synthetic(
@@ -35,8 +35,8 @@ async fn main() -> anyhow::Result<()> {
         .expect("Failed to get sampler"),
         generation_check_interval: 10,
         global_seed: Some(seed),
-        max_concurrency: 4, // not used by Local
-        sim_runner: SimRunner::AthenaK8sJob,
+        max_concurrency: 0, // not used by Local
+        sim_runner: SimRunner::Local,
     };
 
     let fake_athena_endpoint = "wedontusethisanyways.com"; // required cause the functions can also use kubernetes/gRPC runners I configured, but not used here.
@@ -72,15 +72,27 @@ async fn main() -> anyhow::Result<()> {
                 };
 
                 // run the correct async evolve
-                let result = if prox_steps == 0 {
-                    standard_evolve_portfolios(cfg.clone(), ep.clone(), pop.clone()).await
-                } else {
-                    let mem_cfg = MemeticEvolutionConfig {
-                        base: cfg.clone(),
-                        memetic: memetic_params,
-                    };
-                    memetic_evolve_portfolios(mem_cfg.clone(), ep.clone(), pop.clone()).await
-                };
+                let result = task::spawn_blocking(move || {
+                    let rt = tokio::runtime::Builder::new_current_thread()
+                        .enable_all()
+                        .build()
+                        .expect("failed to build mini-runtime");
+
+                    rt.block_on(async {
+                        if prox_steps == 0 {
+                            standard_evolve_portfolios(cfg.clone(), ep.clone(), pop.clone()).await
+                        } else {
+                            let mem_cfg = MemeticEvolutionConfig {
+                                base: cfg.clone(),
+                                memetic: memetic_params,
+                            };
+                            memetic_evolve_portfolios(mem_cfg.clone(), ep.clone(), pop.clone())
+                                .await
+                        }
+                    })
+                })
+                .await
+                .expect("blocking task panicked");
 
                 // offload blocking file I/O
                 let filename = format!("ga_result_{}steps.json", prox_steps);
@@ -95,8 +107,8 @@ async fn main() -> anyhow::Result<()> {
                 anyhow::Ok((prox_steps, result))
             }
         })
-        // only 5 of these futures will run at once:
-        .buffer_unordered(5)
+        // only 6 of these futures will run at once:
+        .buffer_unordered(6)
         // print each result as it comes in
         .for_each(|res| async {
             match res {
