@@ -384,9 +384,9 @@ pub async fn standard_evolve_portfolios(
     let mut population: Vec<Vec<f64>> = population;
 
     // Put here so that we can pass it to the final step
-    let mut simulation_average_returns: Vec<f64> = vec![0.; population_size];
-    let mut simulation_average_volatilities: Vec<f64> = vec![0.; population_size];
-    let mut simulation_average_sharpe_ratios: Vec<f64> = vec![0.; population_size];
+    let simulation_average_returns: Vec<f64> = vec![0.; population_size];
+    let simulation_average_volatilities: Vec<f64> = vec![0.; population_size];
+    let simulation_average_sharpe_ratios: Vec<f64> = vec![0.; population_size];
     // Metrics Vectors
     let mut best_average_return_per_generation: Vec<f64> = vec![0.; generations];
     let mut average_return_per_generation: Vec<f64> = vec![0.; generations];
@@ -417,13 +417,13 @@ pub async fn standard_evolve_portfolios(
         average_sharpe_ratio_per_generation[generation] = eval_result.population_average_sharpe;
 
         // --- Create Portfolio Structs (uses per-portfolio averages) ---
-        let mut portfolio_structs: Vec<Portfolio> = turn_weights_into_portfolios(
+        let portfolio_structs: Vec<Portfolio> = turn_weights_into_portfolios(
             &population,
             &simulation_average_returns,
             &simulation_average_volatilities,
             &simulation_average_sharpe_ratios,
         );
-        let mut fronts = build_pareto_fronts(portfolio_structs.as_slice());
+        let fronts = build_pareto_fronts(portfolio_structs.as_slice());
         let breeding_pool: Vec<&Portfolio> = fronts.iter().flatten().collect();
         let mut next_generation: Vec<Vec<f64>> = Vec::new();
 
@@ -478,7 +478,7 @@ pub async fn standard_evolve_portfolios(
         .expect("Failed to evaluate final population");
 
     // Create final portfolio structs using the final weights and *final* evaluation results
-    let mut final_portfolio_structs = turn_weights_into_portfolios(
+    let final_portfolio_structs = turn_weights_into_portfolios(
         &population,
         &final_eval_result.average_returns,
         &final_eval_result.average_volatilities,
@@ -545,9 +545,9 @@ pub async fn memetic_evolve_portfolios(
     let low_vol = config.memetic.low_volatility_threshold;
 
     // Put here so that we can pass it to the final step
-    let mut simulation_average_returns: Vec<f64> = vec![0.; population_size];
-    let mut simulation_average_volatilities: Vec<f64> = vec![0.; population_size];
-    let mut simulation_average_sharpe_ratios: Vec<f64> = vec![0.; population_size];
+    let simulation_average_returns: Vec<f64> = vec![0.; population_size];
+    let simulation_average_volatilities: Vec<f64> = vec![0.; population_size];
+    let simulation_average_sharpe_ratios: Vec<f64> = vec![0.; population_size];
     // Metrics Vectors
     let mut best_average_return_per_generation: Vec<f64> = vec![0.; generations];
     let mut average_return_per_generation: Vec<f64> = vec![0.; generations];
@@ -580,7 +580,7 @@ pub async fn memetic_evolve_portfolios(
         average_sharpe_ratio_per_generation[generation] = eval_result.population_average_sharpe;
 
         // --- Create Portfolio Structs (uses per-portfolio averages) ---
-        let mut portfolio_structs: Vec<Portfolio> = turn_weights_into_portfolios(
+        let portfolio_structs: Vec<Portfolio> = turn_weights_into_portfolios(
             &population,
             &simulation_average_returns,
             &simulation_average_volatilities,
@@ -705,7 +705,7 @@ pub async fn memetic_evolve_portfolios(
         .expect("Failed to evaluate final population");
 
     // Create final portfolio structs using the final weights and *final* evaluation results
-    let mut final_portfolio_structs = turn_weights_into_portfolios(
+    let final_portfolio_structs = turn_weights_into_portfolios(
         &population,
         &final_eval_result.average_returns,
         &final_eval_result.average_volatilities,
