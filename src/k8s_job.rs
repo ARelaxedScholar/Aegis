@@ -1,19 +1,14 @@
 use anyhow::{Error, Result};
 use futures::{StreamExt, TryStreamExt};
-use k8s_openapi::{
-    api::{
-        batch::v1::{Job, JobSpec},
-        core::v1::{Container, EnvVar, PodSpec, PodTemplateSpec},
-    },
-    apimachinery::pkg::apis::meta::v1::{LabelSelector, ObjectMeta},
+use k8s_openapi::api::batch::v1::{Job, JobSpec};
+use k8s_openapi::api::core::v1::{
+    Container, EmptyDirVolumeSource, EnvVar, EnvVarSource, ObjectFieldSelector, PodSpec,
+    PodTemplateSpec, Volume, VolumeMount,
 };
-use kube::api::ListParams;
-use kube::{
-    api::{Api, DeleteParams, PostParams},
-    runtime::{watcher, watcher::Config, WatchStreamExt},
-    Client,
-};
-//use kube_runtime::watcher::{self, watcher, Event};
+use k8s_openapi::apimachinery::pkg::apis::meta::v1::{LabelSelector, ObjectMeta};
+use kube::api::{Api, DeleteParams, ListParams, PostParams};
+use kube::runtime::{watcher, watcher::Config, WatchStreamExt};
+use kube::Client;
 use serde::Deserialize;
 use serde_json::json;
 use std::{collections::BTreeMap, env};
@@ -24,13 +19,9 @@ use aegis_athena_contracts::sampling::SerdeSampler;
 
 #[derive(Deserialize)]
 struct SimulationBatchResultDTO {
-    // Aggregated sum of returns for each portfolio.
     sum_returns: Vec<f64>,
-    // Aggregated sum of volatilities for each portfolio.
     sum_volatilities: Vec<f64>,
-    // Aggregated sum of Sharpe ratios for each portfolio.
     sum_sharpes: Vec<f64>,
-    // The market scenario (i.e. series of returns) from the last simulation.
     last_scenario: ScenarioDTO,
 }
 
@@ -43,10 +34,7 @@ pub async fn evaluate_generation_in_k8s_job(
     config: &StandardEvolutionConfig,
     population: &[Vec<f64>],
 ) -> Result<PopulationEvaluationResult> {
-    // Turn internal Sampler into the Serde‐friendly DTO
     let serde_sampler = SerdeSampler::from(config.sampler.clone());
-
-    // Build the JSON payload the runner expects
     let payload = json!({
         "sampler": serde_sampler,
         "time_horizon_in_days": config.time_horizon_in_days as i32,
@@ -59,16 +47,12 @@ pub async fn evaluate_generation_in_k8s_job(
     })
     .to_string();
 
-    // Which image should we launch?
     let image = env::var("ATHENA_RUNNER_IMAGE")
         .map_err(|_| Error::msg("ATHENA_RUNNER_IMAGE must be set"))?;
-
-    // Unique name + labels for the Job & its Pods
     let job_name = format!("evolve-{}", Uuid::new_v4());
     let mut labels = BTreeMap::new();
-    labels.insert("job-name".to_string(), job_name.clone());
+    labels.insert("job-name".into(), job_name.clone());
 
-    // Construct the Kubernetes Job
     let job = Job {
         metadata: ObjectMeta {
             name: Some(job_name.clone()),
@@ -78,72 +62,65 @@ pub async fn evaluate_generation_in_k8s_job(
         spec: Some(JobSpec {
             parallelism: Some(config.max_concurrency as i32),
             completions: Some(config.max_concurrency as i32),
-            completion_mode: Some("Indexed".to_string()),
-            selector: Some(LabelSelector {
-                match_labels: Some(labels.clone()),
-                ..Default::default()
-            }),
+            completion_mode: Some("Indexed".into()),
+            selector: Some(LabelSelector { match_labels: Some(labels.clone()), ..Default::default() }),
             template: PodTemplateSpec {
-                metadata: Some(ObjectMeta {
-                    labels: Some(labels.clone()),
-                    ..Default::default()
-                }),
+                metadata: Some(ObjectMeta { labels: Some(labels.clone()), ..Default::default() }),
                 spec: Some(PodSpec {
-		    volumes: Some(vec![
-			Volume {
-				name: "workdir".into(),
-				empty_dir: Some(EmptyDirVolumeSource {}),
-				..Default::default()
-				}
-			]),
-			init_containers: Some(vec![
-				Container {
-				name: "write-payload".into(),
-				image: Some("busybox".into()),
-				command: Some(vec![
-				"sh".into(), "-c".into(), format!("echo '{}' > /workdir/payload.json", payload),]),
-				volume_mounts: Some(vec![
-					name: "workdir".into(),
-					mount_path: "/workdir".into(),
-					..Default::default()}]),
-..Default::default()}
-			]),
+                    // scratch volume
+                    volumes: Some(vec![Volume {
+                        name: "workdir".into(),
+                        empty_dir: Some(EmptyDirVolumeSource {}),
+                        ..Default::default()
+                    }]),
+                    // init container writes payload
+                    init_containers: Some(vec![Container {
+                        name: "write-payload".into(),
+                        image: Some("busybox".into()),
+                        command: Some(vec![
+                            "sh".into(),
+                            "-c".into(),
+                            format!("echo '{}' > /workdir/payload.json", payload.escape_default()),
+                        ]),
+                        volume_mounts: Some(vec![VolumeMount {
+                            name: "workdir".into(),
+                            mount_path: "/workdir".into(),
+                            ..Default::default()
+                        }]),
+                        ..Default::default()
+                    }]),
                     service_account_name: Some("job-runner-sa".into()),
                     restart_policy: Some("Never".into()),
-                    containers: vec![ Container {
-                                            name: "athena-runner".into(),
-                                            image: Some(image.clone()),
-                                            args: Some(vec![
-						// Injecting the path to payload
-                                                "--payload-path".into(),
-						"/workdir/payload.json".into(),
-                                                EnvVar {
-                                                    name: "COMPLETIONS".into(),
-                                                    value: Some(config.max_concurrency.to_string()), // matches spec.completions
-                                                    ..Default::default()
-                                                  },
-                                                // Inject the pod’s completion index:
-                                                EnvVar {
-                                                    name: "JOB_COMPLETION_INDEX".into(),
-                                                    value_from: Some(k8s_openapi::api::core::v1::EnvVarSource {
-                                                        field_ref: Some(k8s_openapi::api::core::v1::ObjectFieldSelector {
-                                                            api_version: None,
-                                                            field_path: "metadata.annotations['batch.kubernetes.io/job-completion-index']".into(),
-                                                        }),
-                                                        ..Default::default()
-                                                    }),
-                                                    ..Default::default()
-                                                },
-                                            ]),
-					    volume_mounts: Some(vec![
-						VolumeMount {
-							name: "workdir".into(),
-							mount_path: "workdir".into(),
-							..Default::default()
-						}
-						]),
-                                            ..Default::default()
-                                        }],
+                    // main container reads file
+                    containers: vec![Container {
+                        name: "athena-runner".into(),
+                        image: Some(image.clone()),
+                        args: Some(vec![
+                            "--payload-path".into(),
+                            "/workdir/payload.json".into(),
+                            "--completions".into(),
+                            config.max_concurrency.to_string(),
+                            "--job-completion-index".into(),
+                            "$(JOB_COMPLETION_INDEX)".into(),
+                        ]),
+                        env: Some(vec![EnvVar {
+                            name: "JOB_COMPLETION_INDEX".into(),
+                            value_from: Some(EnvVarSource {
+                                field_ref: Some(ObjectFieldSelector {
+                                    api_version: None,
+                                    field_path: "metadata.annotations['batch.kubernetes.io/job-completion-index']".into(),
+                                }),
+                                ..Default::default()
+                            }),
+                            ..Default::default()
+                        }]),
+                        volume_mounts: Some(vec![VolumeMount {
+                            name: "workdir".into(),
+                            mount_path: "/workdir".into(),
+                            ..Default::default()
+                        }]),
+                        ..Default::default()
+                    }],
                     ..Default::default()
                 }),
             },
@@ -152,16 +129,11 @@ pub async fn evaluate_generation_in_k8s_job(
         ..Default::default()
     };
 
-    // Submit it
+    // Submit and watch
     let client = Client::try_default().await?;
     let jobs: Api<Job> = Api::namespaced(client.clone(), "default");
     jobs.create(&PostParams::default(), &job).await?;
 
-    // Wait for all Pods to succeed
-    // Create a watcher stream for that one Jo
-
-    // As soon as we see the Job’s succeeded count hit our target, we break
-    // create the watcher on *just* our Job by name
     let mut stream = watcher(
         Api::<Job>::namespaced(client.clone(), "default"),
         Config {
@@ -170,25 +142,19 @@ pub async fn evaluate_generation_in_k8s_job(
         },
     )
     .applied_objects()
-    .boxed(); // only “Applied” events, so we get the Job once on LIST, then again on each UPDATE
+    .boxed();
 
-    // Pull events one by one
-    while let Some(job) = stream.try_next().await? {
-        if let Some(succeeded) = job.status.as_ref().and_then(|s| s.succeeded) {
+    while let Some(j) = stream.try_next().await? {
+        if let Some(succeeded) = j.status.as_ref().and_then(|s| s.succeeded) {
             if succeeded >= config.max_concurrency as i32 {
-                break; // we’ve seen all Pods finish
+                break;
             }
         }
     }
 
-    // Find any one of the Pods, fetch its logs (stdout JSON), parse
-    let lp = ListParams {
-        label_selector: Some(format!("job-name={}", job_name)),
-        ..ListParams::default()
-    };
+    // Collect results
     let pods: Api<k8s_openapi::api::core::v1::Pod> = Api::namespaced(client.clone(), "default");
-    let pod_list = pods.list(&lp).await?;
-
+    let pod_list = pods.list(&ListParams::default().labels(&job_name)).await?;
     let mut partials = Vec::new();
     for pod in pod_list.items {
         if let Some(name) = pod.metadata.name {
@@ -197,6 +163,7 @@ pub async fn evaluate_generation_in_k8s_job(
         }
     }
 
+    // Aggregate and cleanup...
     let n = population.len();
     let mut sum_r = vec![0.0; n];
     let mut sum_v = vec![0.0; n];
