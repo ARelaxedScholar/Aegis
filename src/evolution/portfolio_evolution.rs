@@ -399,7 +399,7 @@ pub async fn standard_evolve_portfolios(
 
     // EVOLUTION BABY!!!
     for generation in 0..generations {
-        println!("Generation {generation + 1) starting.");
+        println!("Generation {generation + 1} starting.");
         let eval_result = population_evaluator(&population)
             .await
             .expect("Failed to evaluate population");
@@ -561,6 +561,7 @@ pub async fn memetic_evolve_portfolios(
 
     // --- Main Evolution Loop ---
     for generation in 0..generations {
+        println!("Generation {generation + 1} starting.");
         // Evaluate the current population
         let eval_result = population_evaluator(&population)
             .await
