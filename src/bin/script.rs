@@ -11,7 +11,7 @@ use tokio::task;
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let time_horizon_in_days = 252;
-    let assets_under_management = 50;
+    let assets_under_management = 10;
     let number_of_factors = 5; // chosen for no specific reason, for the vibes.
     let seed = 42; // a classic
                    // Build your base config; max_concurrency is unused for Local.
