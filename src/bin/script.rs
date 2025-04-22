@@ -116,8 +116,9 @@ async fn main() -> anyhow::Result<()> {
             match res {
                 Ok((steps, r, dur)) => {
                     println!(
-                        "→ run({} steps): took {dur:.2?}:  best_sharpe = {:.4}, pop_avg_sharpe = {:.4}",
+                        "→ run({} steps): took {:?.2}:  best_sharpe = {:.4}, pop_avg_sharpe = {:.4}",
                         steps,
+                        dur,
                         r.final_summary.best_sharpe,
                         r.final_summary.population_average_sharpe
                     );
