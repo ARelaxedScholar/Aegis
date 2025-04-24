@@ -24,7 +24,7 @@ async fn main() -> anyhow::Result<()> {
         money_to_invest: 1_000_000.0,
         risk_free_rate: 0.01,
         elitism_rate: 0.00,
-        mutation_rate: 0.2,
+        mutation_rate: 0.1,
         tournament_size: 3,
         sampler: Sampler::factor_model_synthetic(
             assets_under_management,
