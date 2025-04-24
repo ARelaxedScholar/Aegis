@@ -11,7 +11,7 @@ use tokio::task;
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let time_horizon_in_days = 252;
-    let assets_under_management = 10;
+    let assets_under_management = 50;
     let number_of_factors = 5; // chosen for no specific reason, for the vibes.
     let seed = 42; // a classic
                    // Build your base config; max_concurrency is unused for Local.
@@ -24,7 +24,7 @@ async fn main() -> anyhow::Result<()> {
         money_to_invest: 1_000_000.0,
         risk_free_rate: 0.01,
         elitism_rate: 0.05,
-        mutation_rate: 0.2,
+        mutation_rate: 0.1,
         tournament_size: 3,
         sampler: Sampler::factor_model_synthetic(
             assets_under_management,
@@ -62,7 +62,6 @@ async fn main() -> anyhow::Result<()> {
             let pop = pop.clone();
 
             async move {
-                let run_start = Instant::now();
                 // attach memetic if needed
                 let memetic_params = MemeticParams {
                     local_objective: Objective::SharpeRatio,
@@ -94,8 +93,7 @@ async fn main() -> anyhow::Result<()> {
                 })
                 .await
                 .expect("blocking task panicked");
-                
-                let run_elapsed = run_start.elapsed();
+
                 // offload blocking file I/O
                 let filename = format!("ga_result_{}steps.json", prox_steps);
                 let json = serde_json::to_string_pretty(&result)?;
@@ -105,8 +103,8 @@ async fn main() -> anyhow::Result<()> {
                     Ok::<_, std::io::Error>(())
                 })
                 .await??;
-                
-                anyhow::Ok((prox_steps, result, run_elapsed))
+
+                anyhow::Ok((prox_steps, result))
             }
         })
         // only 6 of these futures will run at once:
@@ -114,11 +112,10 @@ async fn main() -> anyhow::Result<()> {
         // print each result as it comes in
         .for_each(|res| async {
             match res {
-                Ok((steps, r, dur)) => {
+                Ok((steps, r)) => {
                     println!(
-                        "→ run({} steps): took {:.2?}:  best_sharpe = {:.4}, pop_avg_sharpe = {:.4}",
+                        "→ run({} steps): best_sharpe = {:.4}, pop_avg_sharpe = {:.4}",
                         steps,
-                        dur,
                         r.final_summary.best_sharpe,
                         r.final_summary.population_average_sharpe
                     );
