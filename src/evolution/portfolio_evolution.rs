@@ -1029,7 +1029,8 @@ fn compute_portfolio_gradient(
         // Then compute the partial gradient based on objective!
         let partial_gradient = match objective {
             Objective::AnnualizedReturns => {
-                (perturbed_performance.annualized_return - base_performance.annualized_return)
+                // multiply by -1 for maximization
+                -(perturbed_performance.annualized_return - base_performance.annualized_return)
                     / epsilon
             }
             Objective::Volatility => {
@@ -1038,7 +1039,8 @@ fn compute_portfolio_gradient(
                     / epsilon
             }
             Objective::SharpeRatio => {
-                (perturbed_performance.sharpe_ratio - base_performance.sharpe_ratio) / epsilon
+                // multiply by -1 for maximization
+                -(perturbed_performance.sharpe_ratio - base_performance.sharpe_ratio) / epsilon
             }
             Objective::MaximizeStrength => {
                 unreachable!("Objective::MaximizeStrength should never be called in this context");
