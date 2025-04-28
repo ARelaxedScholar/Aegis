@@ -17,9 +17,9 @@ async fn main() -> anyhow::Result<()> {
                    // Build your base config; max_concurrency is unused for Local.
     let base_config = StandardEvolutionConfig {
         time_horizon_in_days,
-        generations: 100,
-        population_size: 100,
-        simulations_per_generation: 4600, // 1000 * log()
+        generations: 5,
+        population_size: 2,
+        simulations_per_generation: 2, // 1000 * log()
         assets_under_management,
         money_to_invest: 1_000_000.0,
         risk_free_rate: 0.01,
