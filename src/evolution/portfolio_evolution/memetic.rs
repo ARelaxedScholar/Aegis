@@ -1,6 +1,11 @@
+use crate::evolution::portfolio_evolution::find_dominant_objective;
+use crate::evolution::portfolio_evolution::Objective;
+use aegis_athena_contracts::common_portfolio_evolution_ds::PortfolioPerformance;
+
+use super::gradients::compute_portfolio_gradient;
 // For conversion to memetic algorithm
 // Takes a single step in the direction indicated by the gradient (proximal operator)
-fn lamarckian_proximal_descent(
+pub fn lamarckian_proximal_descent(
     returns: &[Vec<f64>],
     weights: &[f64],
     performance_report: PortfolioPerformance,

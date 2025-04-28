@@ -3,7 +3,8 @@ use tracing::warn;
 use crate::evolution::portfolio_evolution::{
     generate_offsprings, initialize_population, make_evaluator,
     pareto_evolution::build_pareto_fronts, turn_weights_into_portfolios, EvolutionError,
-    EvolutionResult, EvolutionStrategy, FinalPopulationSummary, SimRunner, StandardEvolutionConfig,
+    EvolutionResult, EvolutionStrategy, FinalPopulationSummary, SimRunnerStrategy,
+    StandardEvolutionConfig,
 };
 use aegis_athena_contracts::portfolio::Portfolio;
 
@@ -19,7 +20,7 @@ impl EvolutionStrategy for StandardParetoEvolution {
         // Initialization Phase
         //
         // Common Enough to Alias
-        if !(matches!(config.sim_runner, SimRunner::Local)) && athena_endpoint.is_none() {
+        if !(matches!(config.sim_runner, SimRunnerStrategy::Local)) && athena_endpoint.is_none() {
             return Err(EvolutionError::MissingAthenaEndpoint);
         }
         let population_size = config.population_size;

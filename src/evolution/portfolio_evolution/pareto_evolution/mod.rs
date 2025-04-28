@@ -1,9 +1,9 @@
+use crate::consts::NUMBER_OF_OPTIMIZATION_OBJECTIVES;
 use crate::evolution::portfolio_evolution::{
     generate_offsprings, initialize_population, make_evaluator, turn_weights_into_portfolios,
-    EvolutionError, EvolutionResult, EvolutionStrategy, FinalPopulationSummary, SimRunner,
+    EvolutionError, EvolutionResult, EvolutionStrategy, FinalPopulationSummary, SimRunnerStrategy,
     StandardEvolutionConfig,
 };
-use crate::NUMBER_OF_OPTIMIZATION_OBJECTIVES;
 use aegis_athena_contracts::portfolio::Portfolio;
 use rayon::prelude::*;
 use tracing::warn;

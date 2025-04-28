@@ -1,3 +1,8 @@
+use aegis_athena_contracts::common_portfolio_evolution_ds::compute_portfolio_performance;
+use tracing::warn;
+
+use crate::evolution::portfolio_evolution::{Objective, PortfolioPerformance};
+
 pub fn compute_portfolio_gradient(
     returns: &[Vec<f64>],
     weights: &[f64],

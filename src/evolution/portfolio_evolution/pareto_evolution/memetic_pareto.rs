@@ -1,7 +1,25 @@
+use std::io;
+
+use aegis_athena_contracts::{
+    common_portfolio_evolution_ds::compute_portfolio_performance, portfolio::Portfolio,
+};
+use rayon::prelude::*;
+use tracing::warn;
+
+use crate::evolution::portfolio_evolution::memetic::lamarckian_proximal_descent;
+use crate::evolution::portfolio_evolution::pareto_evolution::build_pareto_fronts;
+use crate::evolution::portfolio_evolution::{
+    find_dominant_objective, generate_offsprings, initialize_population, make_evaluator,
+    tournament_selection, turn_weights_into_portfolios, EvolutionError, EvolutionResult,
+    EvolutionStrategy, FinalPopulationSummary, MemeticEvolutionConfig, Objective,
+    PortfolioPerformance,
+};
+use rand::distributions::Uniform;
+use rand::{thread_rng, Rng};
 
 pub async fn memetic_evolve_portfolios(
     config: MemeticEvolutionConfig,
-    athena_endpoint: String,
+    athena_endpoint: Option<String>,
 ) -> Result<EvolutionResult, EvolutionError> {
     let population_size = config.base.population_size;
     let generations = config.base.generations;
@@ -13,8 +31,8 @@ pub async fn memetic_evolve_portfolios(
     // Ensure elite size is reasonable
     if elite_population_size == 0 && config.base.elitism_rate > 0.0 {
         warn!(
-        "Warning: Elite population size rounded to 0, check population size and elitism rate."
-    );
+            "Warning: Elite population size rounded to 0, check population size and elitism rate."
+        );
     }
     if elite_population_size >= population_size {
         panic!("Elite population size cannot be >= total population size.");
@@ -48,8 +66,6 @@ pub async fn memetic_evolve_portfolios(
 
     // --- Main Evolution Loop ---
     for generation in 0..generations {
-        eprintln!("Generation {} starting.", generation + 1);
-        io::stdout().flush().unwrap();
         // Evaluate the current population
         let eval_result = population_evaluator(&population)
             .await
@@ -65,8 +81,7 @@ pub async fn memetic_evolve_portfolios(
         best_average_return_per_generation[generation] = eval_result.best_return;
         average_return_per_generation[generation] = eval_result.population_average_return;
         best_average_volatility_per_generation[generation] = eval_result.best_volatility;
-        average_volatility_per_generation[generation] =
-            eval_result.population_average_volatility;
+        average_volatility_per_generation[generation] = eval_result.population_average_volatility;
         best_average_sharpe_ratio_per_generation[generation] = eval_result.best_sharpe;
         average_sharpe_ratio_per_generation[generation] = eval_result.population_average_sharpe;
 
@@ -82,8 +97,7 @@ pub async fn memetic_evolve_portfolios(
         let fronts = build_pareto_fronts(portfolio_structs.as_slice());
 
         // --- The Memetic Part (Local Search) ---
-        let mut next_generation_elites: Vec<Vec<f64>> =
-            Vec::with_capacity(elite_population_size);
+        let mut next_generation_elites: Vec<Vec<f64>> = Vec::with_capacity(elite_population_size);
         let breeding_pool: Vec<&Portfolio> = fronts.iter().flatten().collect(); // Keep original population for breeding pool
 
         let mut elite_candidates: Vec<Portfolio> = Vec::new();

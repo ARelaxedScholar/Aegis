@@ -18,4 +18,3 @@ pub mod evolution;
 pub mod k8s_job;
 pub mod portfolio;
 pub mod web_app;
-

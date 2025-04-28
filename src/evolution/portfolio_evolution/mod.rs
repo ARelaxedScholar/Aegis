@@ -40,7 +40,7 @@ trait EvolutionStrategy {
 pub enum EvolutionError {
     #[error("Invalid population parameters were passed.")]
     BadPopulationParameter(String),
-    #[error("Need Athena runner endpoint, if SimRunner is not local.")]
+    #[error("Need Athena runner endpoint, if SimRunnerStrategy is not local.")]
     MissingAthenaEndpoint,
 }
 
@@ -52,8 +52,16 @@ pub fn initialize_population(
     population_size: usize,
     assets_under_management: usize,
 ) -> Result<Vec<Vec<f64>>, EvolutionError> {
-    if population_size == 0 || assets_under_management == 0 {
-        return Err(EvolutionError::BadPopulationParameter);
+    if population_size == 0 && assets_under_management == 0 {
+        return Err(EvolutionError::BadPopulationParameter("Both population size and assets under management are zero, but none are supposed to be.".into()));
+    } else if population_size == 0 {
+        return Err(EvolutionError::BadPopulationParameter(
+            "Population size cannot be zero".into(),
+        ));
+    } else if assets_under_management == 0 {
+        return Err(EvolutionError::BadPopulationParameter(
+            "Assets under management cannot be zero".into(),
+        ));
     }
 
     let rng = thread_rng();
@@ -114,7 +122,7 @@ pub struct StandardEvolutionConfig {
     pub global_seed: Option<u64>,
     #[serde(default = "default_max_concurrency")]
     pub max_concurrency: usize,
-    pub sim_runner: SimRunner,
+    pub sim_runner: SimRunnerStrategy,
 }
 impl EvolutionConfig for StandardEvolutionConfig {}
 
@@ -169,21 +177,21 @@ pub struct EvolutionResult {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
-pub enum SimRunner {
+pub enum SimRunnerStrategy {
     Local,
     AthenaK8sJob,
     AthenaGrpc,
 }
 
 pub fn make_evaluator(
-    sim_runner: SimRunner,
+    sim_runner: SimRunnerStrategy,
     config: StandardEvolutionConfig,
     athena_endpoint: Option<String>,
 ) -> impl Fn(&[Vec<f64>]) -> BoxFuture<'static, anyhow::Result<PopulationEvaluationResult>> + Clone
 {
     // wrap in Arcs so we can cheaply clone into each branch
     let cfg = Arc::new(config);
-    let ep = Arc::new(athena_endpoint);
+    let ep = Arc::new(athena_endpoint.unwrap());
     let runner = Arc::new(sim_runner);
 
     move |population: &[Vec<f64>]| {
@@ -196,7 +204,7 @@ pub fn make_evaluator(
 
         // dispatch on runner
         match &*runner {
-            SimRunner::Local => {
+            SimRunnerStrategy::Local => {
                 // synchronous path
                 async move {
                     let res = evaluate_population_performance_local(&cfg, &pop_owned);
@@ -204,7 +212,7 @@ pub fn make_evaluator(
                 }
                 .boxed()
             }
-            SimRunner::AthenaK8sJob => {
+            SimRunnerStrategy::AthenaK8sJob => {
                 // async path against Kubernetes
                 async move {
                     let res = evaluate_generation_in_k8s_job(&cfg, &pop_owned).await?;
@@ -212,7 +220,7 @@ pub fn make_evaluator(
                 }
                 .boxed()
             }
-            SimRunner::AthenaGrpc => {
+            SimRunnerStrategy::AthenaGrpc => {
                 // async path against gRPC service
                 async move {
                     let res =
