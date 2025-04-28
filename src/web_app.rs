@@ -1,4 +1,3 @@
-use crate::handlers::{handle_memetic_evolve, handle_standard_evolve};
 use axum::{routing::post, Router};
 use http::header::HeaderName;
 use tower_http::{
@@ -9,8 +8,6 @@ use tower_http::{
 pub fn build_app() -> Router {
     let x_request_id = HeaderName::from_static("x-request-id");
     Router::new()
-        .route("/evolve/standard", post(handle_standard_evolve))
-        .route("/evolve/memetic", post(handle_memetic_evolve))
         .layer(
             tower::ServiceBuilder::new()
                 .layer(SetRequestIdLayer::new(

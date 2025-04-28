@@ -7,7 +7,6 @@ use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 mod athena_client;
 mod consts;
 mod evolution;
-mod handlers;
 mod k8s_job;
 mod web_app;
 
