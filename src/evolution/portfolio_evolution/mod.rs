@@ -129,7 +129,7 @@ impl EvolutionConfig for StandardEvolutionConfig {}
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct MemeticParams {
     /// objective to use during the proximal step
-    pub local_objective: Objective,
+    pub local_objective: BuiltInObjective,
     pub proximal_descent_steps: usize,
     pub proximal_descent_step_size: f64,
     pub high_sharpe_threshold: f64,
@@ -238,13 +238,13 @@ fn find_dominant_objective(
     performance_report: &PortfolioPerformance,
     high_sharpe_threshold: f64,
     low_volatility_threshold: f64,
-) -> Objective {
+) -> BuiltInObjective {
     if performance_report.sharpe_ratio >= high_sharpe_threshold {
-        Objective::SharpeRatio
+        BuiltInObjective::SharpeRatio
     } else if performance_report.percent_annualized_volatility <= low_volatility_threshold {
-        Objective::Volatility
+        BuiltInObjective::Volatility
     } else {
-        Objective::AnnualizedReturns
+        BuiltInObjective::AnnualizedReturns
     }
 }
 
@@ -349,15 +349,31 @@ fn mutate(weights: &mut Vec<f64>, mutation_rate: f64) {
     weights.iter_mut().for_each(|w| *w /= total);
 }
 
+pub trait OptimizationObjective {
+     fn compute(&self, weights: &[f64]) -> f64;
+    fn gradient(&self, weights: &[f64]) -> Option<Vec<f64>> {
+        None 
+    }
+}
 // For Local Search
 // The idea is to push a solution in the solution it already excels in
 // This should ideally lead to a more diverse Pareto Front, and more interesting solutions
 #[derive(PartialEq, Debug, Clone, Serialize, Deserialize, Copy)]
-pub enum Objective {
+pub enum BuiltInObjective {
     AnnualizedReturns,
     SharpeRatio,
     Volatility,
     MaximizeStrength,
+}
+
+impl OptimizationObjective for BuiltInObjective {
+    fn compute(&self, weights: &[f64]) -> f64 {
+        0.
+    }
+
+    fn gradient(&self, weights: &[f64]) -> Option<Vec<f64>> {
+        Some(vec![0.])
+    }
 }
 
 /// Holds the results of evaluating a population over multiple simulations,

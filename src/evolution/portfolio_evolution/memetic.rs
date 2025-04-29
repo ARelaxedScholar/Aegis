@@ -1,5 +1,5 @@
 use crate::evolution::portfolio_evolution::find_dominant_objective;
-use crate::evolution::portfolio_evolution::Objective;
+use crate::evolution::portfolio_evolution::BuiltInObjective;
 use aegis_athena_contracts::common_portfolio_evolution_ds::PortfolioPerformance;
 
 use super::gradients::compute_portfolio_gradient;
@@ -13,12 +13,12 @@ pub fn lamarckian_proximal_descent(
     risk_free_rate: f64,
     time_horizon_in_days: f64,
     step_size: f64,
-    objective: Objective,
+    objective: BuiltInObjective,
     high_sharpe_threshold: f64,
     low_volatility_threshold: f64,
 ) -> Vec<f64> {
     let mut objective_for_descent = objective;
-    if objective_for_descent == Objective::MaximizeStrength {
+    if objective_for_descent == BuiltInObjective::MaximizeStrength {
         objective_for_descent = find_dominant_objective(
             &performance_report,
             high_sharpe_threshold,

@@ -1,7 +1,7 @@
 use aegis_athena_contracts::common_portfolio_evolution_ds::compute_portfolio_performance;
 use tracing::warn;
 
-use crate::evolution::portfolio_evolution::{Objective, PortfolioPerformance};
+use crate::evolution::portfolio_evolution::{BuiltInObjective, PortfolioPerformance};
 
 pub fn compute_portfolio_gradient(
     returns: &[Vec<f64>],
@@ -10,7 +10,7 @@ pub fn compute_portfolio_gradient(
     money_to_invest: f64,
     risk_free_rate: f64,
     time_horizon_in_days: f64,
-    objective: Objective,
+    objective: BuiltInObjective,
 ) -> Vec<f64> {
     // this is how little we perturb the solution
     let epsilon = 1e-6;
@@ -39,26 +39,26 @@ pub fn compute_portfolio_gradient(
 
         // Then compute the partial gradient based on objective!
         let partial_gradient = match objective {
-            Objective::AnnualizedReturns => {
+            BuiltInObjective::AnnualizedReturns => {
                 (perturbed_performance.annualized_return - base_performance.annualized_return)
                     / epsilon
             }
-            Objective::Volatility => {
+            BuiltInObjective::Volatility => {
                 (perturbed_performance.percent_annualized_volatility
                     - base_performance.percent_annualized_volatility)
                     / epsilon
             }
-            Objective::SharpeRatio => {
+            BuiltInObjective::SharpeRatio => {
                 (perturbed_performance.sharpe_ratio - base_performance.sharpe_ratio) / epsilon
             }
-            Objective::MaximizeStrength => {
-                unreachable!("Objective::MaximizeStrength should never be called in this context");
+            BuiltInObjective::MaximizeStrength => {
+                unreachable!("BuiltInObjective::MaximizeStrength should never be called in this context");
             }
         };
         if partial_gradient.is_nan() {
             panic!(
                 "NaN encountered in gradient calculation! \
-                     Index: {}, Objective: {:?}, Epsilon: {}, \
+                     Index: {}, BuiltInObjective: {:?}, Epsilon: {}, \
                      Base Perf: {:?}, Perturbed Perf: {:?}, Weights: {:?}",
                 i,
                 objective,
@@ -71,7 +71,7 @@ pub fn compute_portfolio_gradient(
             // For robustness (we still log this)
             warn!(
                 "Warning: Non-finite gradient ({}) encountered. \
-                     Index: {}, Objective: {:?}, Epsilon: {}, \
+                     Index: {}, BuiltInObjective: {:?}, Epsilon: {}, \
                      Base Perf: {:?}, Perturbed Perf: {:?}, Weights: {:?}. \
                      Substituting gradient component with 0.0.",
                 partial_gradient,

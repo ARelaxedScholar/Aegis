@@ -11,7 +11,7 @@ use crate::evolution::portfolio_evolution::pareto_evolution::build_pareto_fronts
 use crate::evolution::portfolio_evolution::{
     find_dominant_objective, generate_offsprings, initialize_population, make_evaluator,
     tournament_selection, turn_weights_into_portfolios, EvolutionError, EvolutionResult,
-    EvolutionStrategy, FinalPopulationSummary, MemeticEvolutionConfig, Objective,
+    EvolutionStrategy, FinalPopulationSummary, MemeticEvolutionConfig, BuiltInObjective,
     PortfolioPerformance,
 };
 use rand::distributions::Uniform;
@@ -136,7 +136,7 @@ pub async fn memetic_evolve_portfolios(
                     sharpe_ratio: elite_portfolio.sharpe_ratio,
                 };
                 let objective_for_descent = match config.memetic.local_objective {
-                    Objective::MaximizeStrength => {
+                    BuiltInObjective::MaximizeStrength => {
                         find_dominant_objective(&base_performance, high_sharpe, low_vol)
                     }
                     other => other,
