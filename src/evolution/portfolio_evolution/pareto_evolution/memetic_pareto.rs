@@ -10,8 +10,8 @@ use crate::evolution::portfolio_evolution::memetic::lamarckian_proximal_descent;
 use crate::evolution::portfolio_evolution::pareto_evolution::build_pareto_fronts;
 use crate::evolution::portfolio_evolution::{
     find_dominant_objective, generate_offsprings, initialize_population, make_evaluator,
-    tournament_selection, turn_weights_into_portfolios, EvolutionError, EvolutionResult,
-    EvolutionStrategy, FinalPopulationSummary, MemeticEvolutionConfig, BuiltInObjective,
+    tournament_selection, turn_weights_into_portfolios, BuiltInObjective, EvolutionError,
+    EvolutionResult, EvolutionStrategy, FinalPopulationSummary, MemeticEvolutionConfig,
     PortfolioPerformance,
 };
 use rand::distributions::Uniform;

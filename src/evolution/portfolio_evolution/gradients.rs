@@ -52,7 +52,9 @@ pub fn compute_portfolio_gradient(
                 (perturbed_performance.sharpe_ratio - base_performance.sharpe_ratio) / epsilon
             }
             BuiltInObjective::MaximizeStrength => {
-                unreachable!("BuiltInObjective::MaximizeStrength should never be called in this context");
+                unreachable!(
+                    "BuiltInObjective::MaximizeStrength should never be called in this context"
+                );
             }
         };
         if partial_gradient.is_nan() {

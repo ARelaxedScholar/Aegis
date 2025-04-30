@@ -348,33 +348,85 @@ fn mutate(weights: &mut Vec<f64>, mutation_rate: f64) {
     let total: f64 = weights.iter().sum();
     weights.iter_mut().for_each(|w| *w /= total);
 }
-
+pub enum OptimizationDirection {
+    Maximize,
+    Minimize,
+}
+pub trait Aggregator {
+    fn value(&self, returns: &[f64]) -> f64;
+}
 pub trait OptimizationObjective {
-     fn compute(&self, weights: &[f64]) -> f64;
-    fn gradient(&self, weights: &[f64]) -> Option<Vec<f64>> {
-        None 
+    fn compute(&self, weights: &[f64], scenario: &[Vec<f64>]) -> f64;
+    /// A default (numerical) implementation of gradients for any OptimizationObjective
+    /// any scalar objective can thus be differentiated from the get-go.
+    fn gradient(
+        &self,
+        weights: &[f64],
+        scenario: &[Vec<f64>],
+        direction: Option<OptimizationDirection>,
+    ) -> Option<Vec<f64>> {
+        let epsilon = 1e-6;
+        let direction = direction.unwrap_or(self.default_direction());
+        let mut gradient = Vec::with_capacity(weights.len());
+        let objective_untouched = self.compute(weights, scenario);
+
+        for (i, w) in weights.iter().enumerate() {
+            // perturb and normalize
+            let mut perturbed_weights = weights.to_vec();
+            perturbed_weights[i] += epsilon;
+            let total = 1. + epsilon;
+            perturbed_weights
+                .iter()
+                .map(|w| *w / total)
+                .collect::<Vec<f64>>();
+
+            // compute objective with respect to new vector
+            let objective_perturbed = self.compute(perturbed_weights, scenario);
+            let mut partial_grad = (objective_perturbed - objective_untouched) / epsilon;
+
+            // adjust based on objective
+            partial_grad = match direction {
+                // Then gradient ascent (desired form is x_{t+1} = x_t + grad
+                OptimizationDirection::Maximize => -partial_grad, // x_t+1 = x_t - (-grad)
+                // Standard gradient descent
+                OptimizationDirection::Minimize => partial_grad, // keep it as is.
+            };
+            gradient.push(partial_grad);
+        }
+
+        Some(gradient)
     }
-}
-// For Local Search
-// The idea is to push a solution in the solution it already excels in
-// This should ideally lead to a more diverse Pareto Front, and more interesting solutions
-#[derive(PartialEq, Debug, Clone, Serialize, Deserialize, Copy)]
-pub enum BuiltInObjective {
-    AnnualizedReturns,
-    SharpeRatio,
-    Volatility,
-    MaximizeStrength,
+    fn default_direction(&self) -> OptimizationDirection;
 }
 
-impl OptimizationObjective for BuiltInObjective {
-    fn compute(&self, weights: &[f64]) -> f64 {
-        0.
+// The Built-In Objectives
+pub struct Returns; 
+impl OptimizationObjective for Returns {
+    fn compute(&self, weights: &[f64], scenario: &[Vec<f64>]) -> f64 {
+        // compute returns
+        let returns = scenario
+            .par_iter()
+            .map(|row| {
+                row.par_iter()
+                    .zip(weights.par_iter())
+                    .map(|(log_return, weight)| ((log_return.exp() - 1.0) * *weight))
+                    .sum::<f64>()
+            })
+            .collect::<Vec<f64>>();
+        // mean returns
+        let agg_returns = returns.iter().sum::<f64>() / returns.len();
+        agg_returns
     }
-
-    fn gradient(&self, weights: &[f64]) -> Option<Vec<f64>> {
-        Some(vec![0.])
+    fn default_direction(&self) -> OptimizationDirection {
+        OptimizationDirection::Maximize
     }
 }
+
+struct SharpeRatio {}
+impl OptimizationObjective for SharpeRatio {}
+
+struct Volatility {}
+impl OptimizationObjective for Volatility {}
 
 /// Holds the results of evaluating a population over multiple simulations,
 /// including both per-portfolio averages and population-wide summary statistics.
