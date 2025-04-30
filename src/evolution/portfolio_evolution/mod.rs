@@ -1,4 +1,5 @@
 use crate::athena_client::evaluate_population_performance_in_grpc;
+use crate::evolution::objective::OptimizationObjective;
 use crate::k8s_job::evaluate_generation_in_k8s_job;
 use aegis_athena_contracts::common_consts::FLOAT_COMPARISON_EPSILON;
 use aegis_athena_contracts::common_portfolio_evolution_ds::compute_portfolio_performance;
@@ -118,6 +119,7 @@ pub struct StandardEvolutionConfig {
     pub tournament_size: usize,
     pub sampler: Sampler,
     pub generation_check_interval: usize,
+    pub objectives: HashSet<dyn OptimizationObjective>, // NEXT STEP
     #[serde(default)]
     pub global_seed: Option<u64>,
     #[serde(default = "default_max_concurrency")]
@@ -348,85 +350,6 @@ fn mutate(weights: &mut Vec<f64>, mutation_rate: f64) {
     let total: f64 = weights.iter().sum();
     weights.iter_mut().for_each(|w| *w /= total);
 }
-pub enum OptimizationDirection {
-    Maximize,
-    Minimize,
-}
-pub trait Aggregator {
-    fn value(&self, returns: &[f64]) -> f64;
-}
-pub trait OptimizationObjective {
-    fn compute(&self, weights: &[f64], scenario: &[Vec<f64>]) -> f64;
-    /// A default (numerical) implementation of gradients for any OptimizationObjective
-    /// any scalar objective can thus be differentiated from the get-go.
-    fn gradient(
-        &self,
-        weights: &[f64],
-        scenario: &[Vec<f64>],
-        direction: Option<OptimizationDirection>,
-    ) -> Option<Vec<f64>> {
-        let epsilon = 1e-6;
-        let direction = direction.unwrap_or(self.default_direction());
-        let mut gradient = Vec::with_capacity(weights.len());
-        let objective_untouched = self.compute(weights, scenario);
-
-        for (i, w) in weights.iter().enumerate() {
-            // perturb and normalize
-            let mut perturbed_weights = weights.to_vec();
-            perturbed_weights[i] += epsilon;
-            let total = 1. + epsilon;
-            perturbed_weights
-                .iter()
-                .map(|w| *w / total)
-                .collect::<Vec<f64>>();
-
-            // compute objective with respect to new vector
-            let objective_perturbed = self.compute(perturbed_weights, scenario);
-            let mut partial_grad = (objective_perturbed - objective_untouched) / epsilon;
-
-            // adjust based on objective
-            partial_grad = match direction {
-                // Then gradient ascent (desired form is x_{t+1} = x_t + grad
-                OptimizationDirection::Maximize => -partial_grad, // x_t+1 = x_t - (-grad)
-                // Standard gradient descent
-                OptimizationDirection::Minimize => partial_grad, // keep it as is.
-            };
-            gradient.push(partial_grad);
-        }
-
-        Some(gradient)
-    }
-    fn default_direction(&self) -> OptimizationDirection;
-}
-
-// The Built-In Objectives
-pub struct Returns; 
-impl OptimizationObjective for Returns {
-    fn compute(&self, weights: &[f64], scenario: &[Vec<f64>]) -> f64 {
-        // compute returns
-        let returns = scenario
-            .par_iter()
-            .map(|row| {
-                row.par_iter()
-                    .zip(weights.par_iter())
-                    .map(|(log_return, weight)| ((log_return.exp() - 1.0) * *weight))
-                    .sum::<f64>()
-            })
-            .collect::<Vec<f64>>();
-        // mean returns
-        let agg_returns = returns.iter().sum::<f64>() / returns.len();
-        agg_returns
-    }
-    fn default_direction(&self) -> OptimizationDirection {
-        OptimizationDirection::Maximize
-    }
-}
-
-struct SharpeRatio {}
-impl OptimizationObjective for SharpeRatio {}
-
-struct Volatility {}
-impl OptimizationObjective for Volatility {}
 
 /// Holds the results of evaluating a population over multiple simulations,
 /// including both per-portfolio averages and population-wide summary statistics.

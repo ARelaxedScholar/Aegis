@@ -1,0 +1,162 @@
+use crate::evolution::aggregator::{Aggregator, ArithmeticMean, StandardDeviation};
+// This is a trait for any (I might reuse this, if not the code works)
+pub trait AsAny {
+    fn as_any(&self) -> &dyn Any;
+}
+impl<T: Any> AsAny for T {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+}
+
+// Actual objective and optimization stuff
+pub enum OptimizationDirection {
+    Maximize,
+    Minimize,
+}
+
+pub trait OptimizationObjective: AsAny + Send + Sync {
+    fn compute(&self, weights: &[f64], scenario: &[Vec<f64>]) -> Result<f64, &'static str>;
+    /// A default (numerical) implementation of gradients for any OptimizationObjective
+    /// any scalar objective can thus be differentiated from the get-go.
+    fn gradient(
+        &self,
+        weights: &[f64],
+        scenario: &[Vec<f64>],
+        direction: Option<OptimizationDirection>,
+    ) -> Option<Vec<f64>> {
+        let epsilon = 1e-6;
+        let direction = direction.unwrap_or(self.default_direction());
+        let mut gradient = Vec::with_capacity(weights.len());
+        let objective_untouched = self.compute(weights, scenario);
+
+        // central numerical gradient
+        for (i, w) in weights.iter().enumerate() {
+            // perturb and normalize
+            let mut objective_plus = weights.to_vec();
+            let mut objective_minus = weights.to_vec();
+
+            // modify the vectors
+            objective_plus[i] += epsilon;
+            objective_minus[i] -= epsilon;
+            // compute objective with respect to new vector
+            let f_plus = self.compute(objective_plus, scenario);
+            let f_minus = self.compute(objective_minus, scenario);
+
+            // compute central gradient
+            let mut partial_grad = (f_plus - f_minus) / (2. * epsilon);
+
+            // adjust based on objective
+            partial_grad = match direction {
+                // Then gradient ascent (desired form is x_{t+1} = x_t + grad
+                OptimizationDirection::Maximize => -partial_grad, // x_t+1 = x_t - (-grad)
+                // Standard gradient descent
+                OptimizationDirection::Minimize => partial_grad, // keep it as is.
+            };
+            gradient.push(partial_grad);
+        }
+
+        Some(gradient)
+    }
+    fn default_direction(&self) -> OptimizationDirection;
+}
+
+// The Built-In Objectives
+pub struct Returns<A: Aggregator> {
+    aggregator: A,
+}
+
+impl<A: Aggregator> OptimizationObjective for Returns<A> {
+    fn compute(&self, weights: &[f64], scenario: &[Vec<f64>]) -> Result<f64, &'static str> {
+        // compute returns
+        let returns = scenario
+            .par_iter()
+            .map(|row| {
+                row.par_iter()
+                    .zip(weights.par_iter())
+                    .map(|(log_return, weight)| ((log_return.exp() - 1.0) * *weight))
+                    .sum::<f64>()
+            })
+            .collect::<Vec<f64>>();
+        // aggregated returns
+        self.aggregator.value(returns)?
+    }
+    fn gradient(
+        &self,
+        weights: &[f64],
+        scenario: &[Vec<f64>],
+        direction: Option<OptimizationDirection>,
+    ) -> Option<Vec<f64>> {
+        // early fallback
+        let gradient_wrt_returns = self.aggregator.gradient_wrt_series(scenario);
+        if gradient_wrt_returns.is_none() {
+            return OptimizationObjective::gradient(self, weights, scenario, direction);
+        }
+
+        // if the gradient_wrt_series is provided, we can be cleverer.
+        let asset_jacobian = scenario
+            .iter()
+            .map(|row| row.iter().map(|r_ti| r_ti.exp() - 1.).collect::<Vec<f64>>())
+            .collect::<Vec<Vec<f64>>>(); // T x asset_number
+
+        // compute the gradient
+        (0..weights.len())
+            .map(|i| {
+                asset_jacobian // sum across rows for a given asset
+                    .iter()
+                    .zip(gradient_wrt_returns.iter())
+                    .map(|(jacobian_row, g_wi)| jacobian_row[i] * g_wi)
+                    .sum::<f64>()
+            })
+            .collect::<Vec<f64>>()
+    }
+    fn default_direction(&self) -> OptimizationDirection {
+        OptimizationDirection::Maximize
+    }
+}
+
+pub type MeanReturns = Returns<ArithmeticMean>;
+
+pub struct Volatility(pub Returns<StandardDeviation>);
+impl OptimizationObjective for Volatility {
+    fn compute(&self, weights: &[f64], scenario: &[Vec<f64>]) -> Result<f64, &'static str> {
+        // we simply delegate
+        self.0.compute(weights, scenario)?
+    }
+    fn default_direction(&self) -> OptimizationDirection {
+        OptimizationDirection::Minimize
+    }
+}
+
+pub struct SharpeRatio {
+    mean_returns: Returns<ArithmeticMean>,
+    volatility: Volatility,
+    time_horizon_in_days: usize,
+    risk_free_rate: f64,
+}
+impl OptimizationObjective for SharpeRatio {
+    fn compute(&self, weights: &[f64], scenario: &[Vec<f64>]) -> Result<f64, &'static str> {
+        let time_horizon_in_years = (time_horizon_in_days as f64) / 365.;
+        let periods_per_years = scenario.len() / time_horizon_in_years;
+
+        // the arithmetic mean should never fail, hence we use expect on it.
+        let annualized_returns = mean_returns
+            .compute(weights, scenario)
+            .expect("Failed to get mean returns")
+            * periods_per_years;
+        let annualized_vol = volatility.compute(weights, scenario)? * periods_per_years.sqrt();
+
+        // Compute and return sharpe ratio
+        if annualized_vol.abs() >= FLOAT_COMPARISON_EPSILON {
+            // vol is significant enough, so use it.
+            (annualized_returns - self.risk_free_rate) / annualized_volatility
+        } else {
+            // effectively useless portfolio, so penalize it (vol == 0 is impossible IRL)
+            0.
+        }
+    }
+
+    fn default_direction(&self) -> OptimizationDirection {
+        OptimizationDirection::Maximize
+    }
+}
