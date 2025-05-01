@@ -62,10 +62,13 @@ pub trait OptimizationObjective: AsAny + Send + Sync {
         Ok(gradient)
     }
     fn default_direction(&self) -> OptimizationDirection;
+
+    fn direction(&self) -> OptimizationDirection;
 }
 // The Built-In Objectives
 pub struct Returns<A: Aggregator> {
     aggregator: A,
+    direction: Option<OptimizationDirection>,
 }
 
 impl<A: Aggregator + 'static> OptimizationObjective for Returns<A> {
@@ -125,6 +128,9 @@ impl<A: Aggregator + 'static> OptimizationObjective for Returns<A> {
     fn default_direction(&self) -> OptimizationDirection {
         OptimizationDirection::Maximize
     }
+    fn direction(&self) -> OptimizationDirection {
+        self.direction.unwrap_or(self.default_direction())
+    }
 }
 
 pub type MeanReturns = Returns<ArithmeticMean>;
@@ -138,6 +144,9 @@ impl OptimizationObjective for Volatility {
     fn default_direction(&self) -> OptimizationDirection {
         OptimizationDirection::Minimize
     }
+    fn direction(&self) -> OptimizationDirection {
+        self.direction.unwrap_or(self.default_direction())
+    }
 }
 
 pub struct SharpeRatio {
@@ -145,6 +154,7 @@ pub struct SharpeRatio {
     volatility: Volatility,
     time_horizon_in_days: usize,
     risk_free_rate: f64,
+    direction: Option<OptimizationDirection>,
 }
 impl OptimizationObjective for SharpeRatio {
     fn compute(&self, weights: &[f64], scenario: &[Vec<f64>]) -> Result<f64, AggregatorError> {
@@ -171,5 +181,8 @@ impl OptimizationObjective for SharpeRatio {
 
     fn default_direction(&self) -> OptimizationDirection {
         OptimizationDirection::Maximize
+    }
+    fn direction(&self) -> OptimizationDirection {
+        self.direction.unwrap_or(self.default_direction())
     }
 }

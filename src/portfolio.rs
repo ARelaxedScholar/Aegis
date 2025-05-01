@@ -1,4 +1,5 @@
 pub mod portoflio {
+    use crate::evolution::objective::OptimizationObjective;
     use serde::{Deserialize, Serialize};
     use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -8,9 +9,8 @@ pub mod portoflio {
         pub rank: Option<usize>,
         pub crowding_distance: Option<f64>,
         pub weights: Vec<f64>,
-        pub average_returns: f64,
-        pub volatility: f64,
-        pub sharpe_ratio: f64,
+        pub objectives: Vec<dyn OptimizationObjective>,
+        pub stats: Vec<f64>,
     }
 
     impl PartialEq for Portfolio {
@@ -42,12 +42,7 @@ pub mod portoflio {
     static PORTFOLIO_ID_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
     impl Portfolio {
-        pub fn new(
-            weights: Vec<f64>,
-            average_returns: f64,
-            volatility: f64,
-            sharpe_ratio: f64,
-        ) -> Self {
+        pub fn new(weights: Vec<f64>, objective: Vec<dyn OptimizationObjective>, stats: Vec<f64>) -> Self {
             let id = PORTFOLIO_ID_COUNTER.fetch_add(1, Ordering::SeqCst);
             let rank = None;
             let crowding_distance = None;
@@ -56,20 +51,28 @@ pub mod portoflio {
                 rank,
                 crowding_distance,
                 weights,
-                average_returns,
-                volatility,
-                sharpe_ratio,
+                objectives,
+                stats,
             }
         }
 
-        fn to_metrics_vector(&self) -> Vec<f64> {
-            // We negate the self.volatility to make maximization the global goal
-            vec![self.average_returns, -self.volatility, self.sharpe_ratio]
+        pub fn turn_objectives_to_score(&self) -> Vec<f64> {
+            let mut scores = vec![0.; self.objectives.len()];
+
+            for (i, &objective) in self.objectives.iter().enumerate() {
+                let to_push = if objective.direction() == OptimizationDirection::Maximize {
+                    self.stats[i]
+                } else {
+                    -self.stats[i]
+                };
+                scores.push(to_push);
+            }
+            scores
         }
 
         pub fn is_dominated_by(&self, other: &Portfolio) -> bool {
-            let self_metrics = self.to_metrics_vector();
-            let other_metrics = other.to_metrics_vector();
+            let self_metrics = self.turn_objectives_to_score();
+            let other_metrics = other.turn_objectives_to_score();
 
             // Check if 'other' is at least as good as 'self' in all objectives
             let other_is_at_least_as_good_in_all = self_metrics

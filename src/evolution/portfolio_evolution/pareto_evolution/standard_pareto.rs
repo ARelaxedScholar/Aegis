@@ -44,11 +44,6 @@ impl EvolutionStrategy for StandardParetoEvolution {
         let mut population =
             initialize_population(population_size, config.assets_under_management)?;
 
-        // Create the evaluator
-        let runner = config.sim_runner.clone();
-        let cfg = config.clone();
-        let population_evaluator = make_evaluator(runner, cfg, athena_endpoint.clone());
-
         // Ensure elite size is reasonable
         if elite_population_size == 0 && config.elitism_rate > 0.0 {
             warn!(
@@ -71,9 +66,10 @@ impl EvolutionStrategy for StandardParetoEvolution {
         // EVOLUTION BABY!!!
         for generation in 0..generations {
             eprintln!("Generation {} starting.", generation + 1);
-            let eval_result = population_evaluator(&population)
-                .await
-                .expect("Failed to evaluate population");
+            let eval_result: Vec<Vec<f64>> =
+                config
+                    .sim_runner
+                    .evaluate_population(&config, &population, athena_endpoint)?;
 
             // --- Store generation metrics directly from eval_result ---
             let mean_stats = (0..objectives.len())

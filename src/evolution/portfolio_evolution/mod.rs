@@ -1,13 +1,11 @@
-use crate::athena_client::evaluate_population_performance_in_grpc;
 use crate::evolution::objective::OptimizationObjective;
-use crate::k8s_job::evaluate_generation_in_k8s_job;
+use crate::evolution::aggregator::AggregatorError;
 use aegis_athena_contracts::common_consts::FLOAT_COMPARISON_EPSILON;
 use aegis_athena_contracts::{portfolio::Portfolio, sampling::Sampler};
 use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::io::{self, Write};
 
-use self::gradients::compute_portfolio_gradient;
 use crate::consts::{NUMBER_OF_OPTIMIZATION_OBJECTIVES, PERTURBATION};
 use itertools::izip;
 use num_cpus;
@@ -37,12 +35,14 @@ trait EvolutionStrategy {
 
 #[derive(Error, Debug)]
 pub enum EvolutionError {
-    #[error("Invalid population parameters were passed.")]
+    #[error("Invalid population parameters were passed: `{0}`")]
     BadPopulationParameter(String),
     #[error("Need Athena runner endpoint, if SimRunnerStrategy is not local.")]
     MissingAthenaEndpoint,
     #[error("Cannot pass duplicated objective to evolution strategy.")]
     DuplicatedObjective,
+    #[error("An error occured during computation of objective: `{0}`")]
+    ObjectiveComputationFailed(AggregatorError),
 }
 
 fn default_max_concurrency() -> usize {
@@ -87,7 +87,7 @@ fn turn_weights_into_portfolios(population: &[Vec<f64>], stats: &[Vec<f64>]) -> 
     population
         .par_iter()
         .zip(stats.par_iter())
-        .map(|(weight, &stats)| Portfolio::new(weights.to_vec(), stats.to_vec()))
+        .map(|(weights, &stats)| Portfolio::new(weights.to_vec(), stats.to_vec()))
         .collect()
 }
 
@@ -110,7 +110,7 @@ pub struct StandardEvolutionConfig {
     pub global_seed: Option<u64>,
     #[serde(default = "default_max_concurrency")]
     pub max_concurrency: usize,
-    pub sim_runner: SimRunnerStrategy,
+    pub sim_runner: dyn SimRunnerStrategy,
 }
 impl EvolutionConfig for StandardEvolutionConfig {}
 
@@ -145,64 +145,64 @@ pub struct FinalPopulationSummary {
 #[derive(Serialize, Deserialize, Debug)]
 pub struct EvolutionResult {
     pub pareto_fronts: Vec<Vec<Portfolio>>,
-    pub averages_matrix: Vec<Vec<f64>>,
-    pub bests_matrix: Vec<Vec<f64>>,
+    pub averages_matrix: Vec<Vec<f64>>, // this is the per-generation averages
+    pub bests_matrix: Vec<Vec<f64>>,    // this is the per-generation maxes
     pub final_summary: FinalPopulationSummary,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
-pub enum SimRunnerStrategy {
-    Local,
-    AthenaK8sJob,
-    AthenaGrpc,
+pub trait SimRunnerStrategy {
+    fn evaluate_population(
+        &self,
+        config: &StandardEvolutionConfig,
+        population: &[Vec<f64>],
+        athena_endpoint: Option<String>,
+    ) -> Result<PopulationEvaluationResult, EvolutionError>;
 }
+pub struct Local;
+impl SimRunnerStrategy for Local {
+    fn evaluate_population(
+        config: &StandardEvolutionConfig,
+        population: &[Vec<f64>],
+        athena_endpoint: Option<String>,
+    ) -> PopulationEvaluationResult {
+        let sampler = config.sampler;
+        // preallocate a matrix of population.len() * objectives.len()
+        let mut sum_matrix = vec![vec![0.; config.objectives.len()]; population.len()];
+        let simulations_per_generation = config.simulations_per_generation;
+        let mut scenario = sampler.sample_returns();
+        let objectives = config.objectives;
 
-pub fn make_evaluator(
-    sim_runner: SimRunnerStrategy,
-    config: StandardEvolutionConfig,
-    athena_endpoint: Option<String>,
-) -> impl Fn(&[Vec<f64>]) -> BoxFuture<'static, anyhow::Result<PopulationEvaluationResult>> + Clone
-{
-    // wrap in Arcs so we can cheaply clone into each branch
-    let cfg = Arc::new(config);
-    let ep = Arc::new(athena_endpoint.unwrap());
-    let runner = Arc::new(sim_runner);
+        // Run the simulations
+        for sim_i in 0..config.simulations_per_generation {
+            // Just progressively modify the matrix, adding and then dividing (do everything
+            // in-place)
+            for (i, &objective) in objectives.iter().enumerate() {
+                for (j, &weight) in population.iter().enumerate() {
+                    let objective_value = objective
+                        .compute(weight, scenario)
+                        .unwrap_or_else(|e| EvolutionError::ObjectiveComputationFailed(e))?;
+                    sum_matrix[j][i] += objective_value;
+                }
+            }
 
-    move |population: &[Vec<f64>]| {
-        // First clone everything we need *owned* into this particular call:
-        let cfg = cfg.clone();
-        let ep = ep.clone();
-        let runner = runner.clone();
-        // clone the population slice into an owned Vec<Vec<f64>>
-        let pop_owned = population.to_owned();
+            scenario = sampler.sampler_returns();
+        }
 
-        // dispatch on runner
-        match &*runner {
-            SimRunnerStrategy::Local => {
-                // synchronous path
-                async move {
-                    let res = evaluate_population_performance_local(&cfg, &pop_owned);
-                    Ok(res)
-                }
-                .boxed()
-            }
-            SimRunnerStrategy::AthenaK8sJob => {
-                // async path against Kubernetes
-                async move {
-                    let res = evaluate_generation_in_k8s_job(&cfg, &pop_owned).await?;
-                    Ok(res)
-                }
-                .boxed()
-            }
-            SimRunnerStrategy::AthenaGrpc => {
-                // async path against gRPC service
-                async move {
-                    let res =
-                        evaluate_population_performance_in_grpc(&cfg, &pop_owned, &ep).await?;
-                    Ok(res)
-                }
-                .boxed()
-            }
+        // then do the averaging
+        let inv_sims = 1.0 / simulations_per_generation;
+        let average_matrix: Vec<Vec<f64>> = sum_matrix
+            .into_iter()
+            .map(|row| row.into_iter().map(|x| x * inv_sims).collect())
+            .collect();
+        let bests: Vec<f64> = (0..objectives.len())
+            .map(|objective_idx| average_matrix.iter().map(|row| row[objective_idx]).max())
+            .collect();
+
+        // return
+        PopulationEvaluationResult {
+            average_matrix,
+            bests,
+            last_scenario_returns: scenario,
         }
     }
 }
