@@ -2,10 +2,9 @@ use crate::athena_client::evaluate_population_performance_in_grpc;
 use crate::evolution::objective::OptimizationObjective;
 use crate::k8s_job::evaluate_generation_in_k8s_job;
 use aegis_athena_contracts::common_consts::FLOAT_COMPARISON_EPSILON;
-use aegis_athena_contracts::common_portfolio_evolution_ds::compute_portfolio_performance;
-use aegis_athena_contracts::common_portfolio_evolution_ds::PortfolioPerformance;
 use aegis_athena_contracts::{portfolio::Portfolio, sampling::Sampler};
 use std::cmp::Ordering;
+use std::collections::HashMap;
 use std::io::{self, Write};
 
 use self::gradients::compute_portfolio_gradient;
@@ -42,6 +41,8 @@ pub enum EvolutionError {
     BadPopulationParameter(String),
     #[error("Need Athena runner endpoint, if SimRunnerStrategy is not local.")]
     MissingAthenaEndpoint,
+    #[error("Cannot pass duplicated objective to evolution strategy.")]
+    DuplicatedObjective,
 }
 
 fn default_max_concurrency() -> usize {
@@ -82,25 +83,11 @@ pub fn initialize_population(
         .collect::<Vec<_>>())
 }
 
-fn turn_weights_into_portfolios(
-    population: &[Vec<f64>],
-    simulation_average_returns: &[f64],
-    simulation_average_volatilities: &[f64],
-    simulation_average_sharpe_ratios: &[f64],
-) -> Vec<Portfolio> {
-    let portfolio_simulation_averages: Vec<(&Vec<f64>, &f64, &f64, &f64)> = izip!(
-        population,
-        simulation_average_returns,
-        simulation_average_volatilities,
-        simulation_average_sharpe_ratios
-    )
-    .collect();
-
-    portfolio_simulation_averages
+fn turn_weights_into_portfolios(population: &[Vec<f64>], stats: &[Vec<f64>]) -> Vec<Portfolio> {
+    population
         .par_iter()
-        .map(|(portfolio, &ave_ret, &ave_vol, &ave_sharpe)| {
-            Portfolio::new(portfolio.to_vec(), ave_ret, ave_vol, ave_sharpe)
-        })
+        .zip(stats.par_iter())
+        .map(|(weight, &stats)| Portfolio::new(weights.to_vec(), stats.to_vec()))
         .collect()
 }
 
@@ -118,7 +105,7 @@ pub struct StandardEvolutionConfig {
     pub tournament_size: usize,
     pub sampler: Sampler,
     pub generation_check_interval: usize,
-    pub objectives: HashSet<dyn OptimizationObjective>, // NEXT STEP
+    pub objectives: Vec<dyn OptimizationObjective>, // add a monitoring metric trait and stuff
     #[serde(default)]
     pub global_seed: Option<u64>,
     #[serde(default = "default_max_concurrency")]
@@ -151,29 +138,15 @@ impl EvolutionConfig for MemeticEvolutionConfig {}
 /// Contains summary statistics for the final population after evolution.
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct FinalPopulationSummary {
-    /// Best (highest) average return found in the final population.
-    pub best_return: f64,
-    /// Average of the average returns across the final population.
-    pub population_average_return: f64,
-    /// Best (lowest) average volatility found in the final population.
-    pub best_volatility: f64,
-    /// Average of the average volatilities across the final population.
-    pub population_average_volatility: f64,
-    /// Best (highest) average Sharpe ratio found in the final population.
-    pub best_sharpe: f64,
-    /// Average of the average Sharpe ratios across the final population.
-    pub population_average_sharpe: f64,
+    pub bests: Vec<f64>,
+    pub averages: Vec<f64>,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct EvolutionResult {
     pub pareto_fronts: Vec<Vec<Portfolio>>,
-    pub best_average_return_per_generation: Vec<f64>,
-    pub average_return_per_generation: Vec<f64>,
-    pub best_average_volatility_per_generation: Vec<f64>,
-    pub average_volatility_per_generation: Vec<f64>,
-    pub best_average_sharpe_ratio_per_generation: Vec<f64>,
-    pub average_sharpe_ratio_per_generation: Vec<f64>,
+    pub averages_matrix: Vec<Vec<f64>>,
+    pub bests_matrix: Vec<Vec<f64>>,
     pub final_summary: FinalPopulationSummary,
 }
 
@@ -234,21 +207,6 @@ pub fn make_evaluator(
     }
 }
 
-// Helper function needs adjustment for threshold parameters
-fn find_dominant_objective(
-    performance_report: &PortfolioPerformance,
-    high_sharpe_threshold: f64,
-    low_volatility_threshold: f64,
-) -> BuiltInObjective {
-    if performance_report.sharpe_ratio >= high_sharpe_threshold {
-        BuiltInObjective::SharpeRatio
-    } else if performance_report.percent_annualized_volatility <= low_volatility_threshold {
-        BuiltInObjective::Volatility
-    } else {
-        BuiltInObjective::AnnualizedReturns
-    }
-}
-
 fn generate_offsprings(
     population: &[&Portfolio],
     offspring_count: usize,
@@ -305,7 +263,6 @@ fn tournament_selection(population_refs: &[&Portfolio], k: usize) -> Vec<f64> {
         .min_by(|&&a, &&b| {
             // Compare the &Portfolio references using the implemented PartialOrd
             a.partial_cmp(b).unwrap_or(Ordering::Equal) // Treat non-comparable as equal for sorting
-                                                        // Or Ordering::Less/Greater if a default is needed
         })
         .expect("Failed to find a winner in tournament selection"); // Should not happen if contestants is not empty
 
@@ -355,154 +312,9 @@ fn mutate(weights: &mut Vec<f64>, mutation_rate: f64) {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PopulationEvaluationResult {
     // Per-Portfolio Averages
-    /// Average annualized return for each portfolio in the evaluated population.
-    pub average_returns: Vec<f64>,
-    /// Average annualized volatility (as a percentage) for each portfolio.
-    pub average_volatilities: Vec<f64>,
-    /// Average Sharpe ratio for each portfolio.
-    pub average_sharpe_ratios: Vec<f64>,
-
+    pub averages_matrix: Vec<Vec<f64>>,
+    pub bests: Vec<f64>,
     // Last Simulation Data
     /// The return scenarios sampled during the *last* simulation run (needed for memetic search).
     pub last_scenario_returns: Vec<Vec<f64>>,
-
-    // Population-Wide Summary Statistics (calculated from the per-portfolio averages)
-    /// Best (highest) average return found in the population for this evaluation.
-    pub best_return: f64,
-    /// Average of the average returns across the entire population.
-    pub population_average_return: f64,
-    /// Best (lowest) average volatility found in the population.
-    pub best_volatility: f64,
-    /// Average of the average volatilities across the entire population.
-    pub population_average_volatility: f64,
-    /// Best (highest) average Sharpe ratio found in the population.
-    pub best_sharpe: f64,
-    /// Average of the average Sharpe ratios across the entire population.
-    pub population_average_sharpe: f64,
-}
-
-/// Evaluates the performance of a given population of portfolios over multiple simulations.
-///
-/// Calculates per-portfolio average metrics and population-wide summary statistics.
-///
-/// # Arguments
-/// * `population`: A slice of weight vectors representing the portfolios to evaluate.
-/// * `config`: The base configuration containing simulation parameters and the sampler.
-///
-/// # Returns
-/// A `PopulationEvaluationResult` struct. Returns default/empty values if the input population is empty.
-fn evaluate_population_performance_local(
-    config: &StandardEvolutionConfig,
-    population: &[Vec<f64>],
-) -> PopulationEvaluationResult {
-    let population_size = population.len();
-    if population_size == 0 {
-        return PopulationEvaluationResult {
-            average_returns: vec![],
-            average_volatilities: vec![],
-            average_sharpe_ratios: vec![],
-            last_scenario_returns: vec![],
-            best_return: f64::NEG_INFINITY,
-            population_average_return: 0.0,
-            best_volatility: f64::INFINITY,
-            population_average_volatility: 0.0,
-            best_sharpe: f64::NEG_INFINITY,
-            population_average_sharpe: 0.0,
-        };
-    }
-
-    let simulations_per_generation = config.simulations_per_generation;
-
-    // Initialize accumulators
-    let mut accumulated_returns = vec![0.0; population_size];
-    let mut accumulated_volatilities = vec![0.0; population_size];
-    let mut accumulated_sharpe_ratios = vec![0.0; population_size];
-    let mut last_scenario_returns: Vec<Vec<f64>> = vec![];
-    let mut cfg_clone = config.clone();
-
-    // --- Simulation Loop ---
-    for i in 0..simulations_per_generation {
-        let scenario_returns = cfg_clone.sampler.sample_returns();
-        if i == simulations_per_generation - 1 {
-            last_scenario_returns = scenario_returns.clone();
-        }
-
-        let performance_metrics_in_scenario: Vec<(f64, f64, f64)> = population
-            .par_iter()
-            .map(|portfolio_weights| {
-                let performance = compute_portfolio_performance(
-                    &scenario_returns,
-                    portfolio_weights,
-                    config.money_to_invest,
-                    config.risk_free_rate,
-                    config.time_horizon_in_days as f64,
-                );
-                (
-                    performance.annualized_return,
-                    performance.percent_annualized_volatility,
-                    performance.sharpe_ratio,
-                )
-            })
-            .collect();
-
-        for (idx, (ret, vol, sharpe)) in performance_metrics_in_scenario.iter().enumerate() {
-            accumulated_returns[idx] += ret;
-            accumulated_volatilities[idx] += vol;
-            accumulated_sharpe_ratios[idx] += sharpe;
-        }
-    } // --- End of Simulation Loop ---
-
-    // --- Calculate Per-Portfolio Averages ---
-    let sim_count_f64 = simulations_per_generation as f64;
-    // These vectors hold the average performance for each *individual* portfolio
-    let average_returns: Vec<f64> = accumulated_returns
-        .par_iter()
-        .map(|&sum| sum / sim_count_f64)
-        .collect();
-    let average_volatilities: Vec<f64> = accumulated_volatilities
-        .par_iter()
-        .map(|&sum| sum / sim_count_f64)
-        .collect();
-    let average_sharpe_ratios: Vec<f64> = accumulated_sharpe_ratios
-        .par_iter()
-        .map(|&sum| sum / sim_count_f64)
-        .collect();
-
-    // --- Calculate Population-Wide Summary Statistics ---
-    let population_size_f64 = population_size as f64;
-
-    // Use the calculated per-portfolio averages to get population stats
-    let best_return = average_returns
-        .par_iter()
-        .fold(|| f64::NEG_INFINITY, |a, &b| a.max(b))
-        .reduce(|| f64::NEG_INFINITY, |a, b| a.max(b));
-    let population_average_return = average_returns.par_iter().sum::<f64>() / population_size_f64;
-
-    let best_volatility = average_volatilities
-        .par_iter()
-        .fold(|| f64::INFINITY, |a, &b| a.min(b))
-        .reduce(|| f64::INFINITY, |a, b| a.min(b));
-    let population_average_volatility =
-        average_volatilities.par_iter().sum::<f64>() / population_size_f64;
-
-    let best_sharpe = average_sharpe_ratios
-        .par_iter()
-        .fold(|| f64::NEG_INFINITY, |a, &b| a.max(b))
-        .reduce(|| f64::NEG_INFINITY, |a, b| a.max(b));
-    let population_average_sharpe =
-        average_sharpe_ratios.par_iter().sum::<f64>() / population_size_f64;
-
-    // --- Return Results ---
-    PopulationEvaluationResult {
-        average_returns, // Per-portfolio averages
-        average_volatilities,
-        average_sharpe_ratios,
-        last_scenario_returns, // Data from last sim run
-        best_return,           // Population summary stats
-        population_average_return,
-        best_volatility,
-        population_average_volatility,
-        best_sharpe,
-        population_average_sharpe,
-    }
 }

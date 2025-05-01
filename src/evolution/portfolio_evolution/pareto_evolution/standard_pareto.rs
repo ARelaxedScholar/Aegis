@@ -18,11 +18,24 @@ impl EvolutionStrategy for StandardParetoEvolution {
         athena_endpoint: Option<String>,
     ) -> Result<EvolutionResult, EvolutionError> {
         // Initialization Phase
-        //
-        // Common Enough to Alias
+        // Check that we received the athena endpoint if we're gonna need it.
         if !(matches!(config.sim_runner, SimRunnerStrategy::Local)) && athena_endpoint.is_none() {
             return Err(EvolutionError::MissingAthenaEndpoint);
         }
+        // Check that optimization objectives are non-duplicated
+        let objectives = config.objectives;
+        let mut seen = Vec::with_capacity(objectives.len());
+
+        for objective in objectives.iter() {
+            let tid = objective.as_any().type_id();
+            if seen.contains(tid) {
+                return Err(DuplicateObjective);
+            }
+            seen.push(tid);
+        }
+        drop(seen); // we won't use this anymore, so free memory.
+
+        // aliasing common variables
         let population_size = config.population_size;
         let generations = config.generations;
         let simulations_per_generation = config.simulations_per_generation;
@@ -53,19 +66,8 @@ impl EvolutionStrategy for StandardParetoEvolution {
         let mut population: Vec<Vec<f64>> = population;
 
         // Put here so that we can pass it to the final step
-        let simulation_average_returns: Vec<f64> = vec![0.; population_size];
-        let simulation_average_volatilities: Vec<f64> = vec![0.; population_size];
-        let simulation_average_sharpe_ratios: Vec<f64> = vec![0.; population_size];
-        // Metrics Vectors
-        let mut best_average_return_per_generation: Vec<f64> = vec![0.; generations];
-        let mut average_return_per_generation: Vec<f64> = vec![0.; generations];
-
-        let mut best_average_volatility_per_generation: Vec<f64> = vec![0.; generations];
-        let mut average_volatility_per_generation: Vec<f64> = vec![0.; generations];
-
-        let mut best_average_sharpe_ratio_per_generation: Vec<f64> = vec![0.; generations];
-        let mut average_sharpe_ratio_per_generation: Vec<f64> = vec![0.; generations];
-
+        let mut averages_matrix = Vec::<Vec<f64>>::with_capacity(generations);
+        let mut bests_matrix = Vec::<Vec<f64>>::with_capacity(generations);
         // EVOLUTION BABY!!!
         for generation in 0..generations {
             eprintln!("Generation {} starting.", generation + 1);
@@ -73,27 +75,25 @@ impl EvolutionStrategy for StandardParetoEvolution {
                 .await
                 .expect("Failed to evaluate population");
 
-            // --- Extract results ---
-            let simulation_average_returns = eval_result.average_returns; // Per-portfolio
-            let simulation_average_volatilities = eval_result.average_volatilities;
-            let simulation_average_sharpe_ratios = eval_result.average_sharpe_ratios;
-
             // --- Store generation metrics directly from eval_result ---
-            best_average_return_per_generation[generation] = eval_result.best_return;
-            average_return_per_generation[generation] = eval_result.population_average_return;
-            best_average_volatility_per_generation[generation] = eval_result.best_volatility;
-            average_volatility_per_generation[generation] =
-                eval_result.population_average_volatility;
-            best_average_sharpe_ratio_per_generation[generation] = eval_result.best_sharpe;
-            average_sharpe_ratio_per_generation[generation] = eval_result.population_average_sharpe;
+            let mean_stats = (0..objectives.len())
+                .iter()
+                .map(|(objective_idx)| {
+                    eval_result
+                        .averages_matrix
+                        .iter()
+                        .map(|portfolio_stats| portfolio_stats[objective_idx])
+                        .sum::<f64>()
+                        / population.len()
+                })
+                .collect::<Vec<f64>>();
+
+            averages_matrix.push(mean_stats());
+            bests_matrix.push(eval_result.bests);
 
             // --- Create Portfolio Structs (uses per-portfolio averages) ---
-            let portfolio_structs: Vec<Portfolio> = turn_weights_into_portfolios(
-                &population,
-                &simulation_average_returns,
-                &simulation_average_volatilities,
-                &simulation_average_sharpe_ratios,
-            );
+            let portfolio_structs: Vec<Portfolio> =
+                turn_weights_into_portfolios(&population, &eval_result.averages_matrix);
             let fronts = build_pareto_fronts(portfolio_structs.as_slice());
             let breeding_pool: Vec<&Portfolio> = fronts.iter().flatten().collect();
             let mut next_generation: Vec<Vec<f64>> = Vec::new();
@@ -149,33 +149,33 @@ impl EvolutionStrategy for StandardParetoEvolution {
             .expect("Failed to evaluate final population");
 
         // Create final portfolio structs using the final weights and *final* evaluation results
-        let final_portfolio_structs = turn_weights_into_portfolios(
-            &population,
-            &final_eval_result.average_returns,
-            &final_eval_result.average_volatilities,
-            &final_eval_result.average_sharpe_ratios,
-        );
+        let final_portfolio_structs =
+            turn_weights_into_portfolios(&population, &final_eval_result.averages_matrix);
+
+        let mean_stats = (0..objectives.len())
+            .iter()
+            .map(|(objective_idx)| {
+                final_eval_result
+                    .averages_matrix
+                    .iter()
+                    .map(|portfolio_stats| portfolio_stats[objective_idx])
+                    .sum::<f64>()
+                    / population.len()
+            })
+            .collect::<Vec<f64>>();
 
         // Create the final summary object
         let final_summary = FinalPopulationSummary {
-            best_return: final_eval_result.best_return,
-            population_average_return: final_eval_result.population_average_return,
-            best_volatility: final_eval_result.best_volatility,
-            population_average_volatility: final_eval_result.population_average_volatility,
-            best_sharpe: final_eval_result.best_sharpe,
-            population_average_sharpe: final_eval_result.population_average_sharpe,
+            averages: mean_stats,
+            bests: final_eval_result.bests,
         };
 
         // --- Prepare and return the EvolutionResult ---
         Ok(EvolutionResult {
             pareto_fronts: build_pareto_fronts(final_portfolio_structs.as_slice()),
             // Generation history vectors were filled during the loop
-            best_average_return_per_generation,
-            average_return_per_generation,
-            best_average_volatility_per_generation,
-            average_volatility_per_generation,
-            best_average_sharpe_ratio_per_generation,
-            average_sharpe_ratio_per_generation,
+            averages_matrix,
+            bests_matrix,
             // Include the final summary
             final_summary,
         })
