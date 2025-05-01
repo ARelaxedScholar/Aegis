@@ -22,7 +22,6 @@ use futures::{future::BoxFuture, FutureExt};
 use std::sync::Arc;
 use thiserror::Error;
 
-mod gradients;
 mod memetic;
 mod pareto_evolution;
 
