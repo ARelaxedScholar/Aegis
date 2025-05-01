@@ -1,6 +1,5 @@
 use crate::evolution::portfolio_evolution::find_dominant_objective;
-use crate::evolution::portfolio_evolution::BuiltInObjective;
-use aegis_athena_contracts::common_portfolio_evolution_ds::PortfolioPerformance;
+use crate::evolution::PortfolioPerformance;
 
 use super::gradients::compute_portfolio_gradient;
 // For conversion to memetic algorithm

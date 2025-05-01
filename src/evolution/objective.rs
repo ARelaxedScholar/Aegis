@@ -2,7 +2,9 @@ use crate::evolution::aggregator::{
     Aggregator, AggregatorError, ArithmeticMean, StandardDeviation,
 };
 use aegis_athena_contracts::common_consts::FLOAT_COMPARISON_EPSILON;
+use dyn_clone::DynClone;
 use rayon::prelude::*;
+use serde::{Deserialize, Serialize};
 use std::any::Any;
 // This is a trait for any (I might reuse this, if not the code works)
 pub trait AsAny {
@@ -15,12 +17,14 @@ impl<T: Any> AsAny for T {
     }
 }
 // Actual objective and optimization stuff
+#[derive(Copy, Clone, Serialize, Deserialize, Debug)]
 pub enum OptimizationDirection {
     Maximize,
     Minimize,
 }
 
-pub trait OptimizationObjective: AsAny + Send + Sync {
+#[typetag::serde(tag = "type")]
+pub trait OptimizationObjective: DynClone + std::fmt::Debug + AsAny + Send + Sync {
     fn compute(&self, weights: &[f64], scenario: &[Vec<f64>]) -> Result<f64, AggregatorError>;
     /// A default (numerical) implementation of gradients for any OptimizationObjective
     /// any scalar objective can thus be differentiated from the get-go.
@@ -65,12 +69,15 @@ pub trait OptimizationObjective: AsAny + Send + Sync {
 
     fn direction(&self) -> OptimizationDirection;
 }
+dyn_clone::clone_trait_object!(OptimizationObjective);
 // The Built-In Objectives
+#[derive(Serialize, Deserialize, Debug)]
 pub struct Returns<A: Aggregator> {
     aggregator: A,
     direction: Option<OptimizationDirection>,
 }
 
+#[typetag::serde]
 impl<A: Aggregator + 'static> OptimizationObjective for Returns<A> {
     fn compute(&self, weights: &[f64], scenario: &[Vec<f64>]) -> Result<f64, AggregatorError> {
         // compute returns
@@ -135,6 +142,7 @@ impl<A: Aggregator + 'static> OptimizationObjective for Returns<A> {
 
 pub type MeanReturns = Returns<ArithmeticMean>;
 
+#[derive(Serialize, Deserialize, Debug)]
 pub struct Volatility(pub Returns<StandardDeviation>);
 impl OptimizationObjective for Volatility {
     fn compute(&self, weights: &[f64], scenario: &[Vec<f64>]) -> Result<f64, AggregatorError> {
@@ -149,6 +157,7 @@ impl OptimizationObjective for Volatility {
     }
 }
 
+#[derive(Serialize, Deserialize, Debug)]
 pub struct SharpeRatio {
     mean_returns: Returns<ArithmeticMean>,
     volatility: Volatility,
@@ -156,6 +165,8 @@ pub struct SharpeRatio {
     risk_free_rate: f64,
     direction: Option<OptimizationDirection>,
 }
+
+#[typetag::serde]
 impl OptimizationObjective for SharpeRatio {
     fn compute(&self, weights: &[f64], scenario: &[Vec<f64>]) -> Result<f64, AggregatorError> {
         let time_horizon_in_years = (self.time_horizon_in_days as f64) / 365.;

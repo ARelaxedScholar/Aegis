@@ -1,7 +1,9 @@
-use crate::evolution::objective::OptimizationObjective;
 use crate::evolution::aggregator::AggregatorError;
+use crate::evolution::objective::OptimizationObjective;
+use crate::portfolio::Portfolio;
 use aegis_athena_contracts::common_consts::FLOAT_COMPARISON_EPSILON;
-use aegis_athena_contracts::{portfolio::Portfolio, sampling::Sampler};
+use aegis_athena_contracts::sampling::Sampler;
+use std::boxed::Box;
 use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::io::{self, Write};
@@ -105,7 +107,7 @@ pub struct StandardEvolutionConfig {
     pub tournament_size: usize,
     pub sampler: Sampler,
     pub generation_check_interval: usize,
-    pub objectives: Vec<dyn OptimizationObjective>, // add a monitoring metric trait and stuff
+    pub objectives: Vec<Box<dyn OptimizationObjective>>, // add a monitoring metric trait and stuff
     #[serde(default)]
     pub global_seed: Option<u64>,
     #[serde(default = "default_max_concurrency")]

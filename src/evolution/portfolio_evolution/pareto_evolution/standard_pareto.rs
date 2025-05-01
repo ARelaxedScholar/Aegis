@@ -6,7 +6,7 @@ use crate::evolution::portfolio_evolution::{
     EvolutionResult, EvolutionStrategy, FinalPopulationSummary, SimRunnerStrategy,
     StandardEvolutionConfig,
 };
-use aegis_athena_contracts::portfolio::Portfolio;
+use crate::portfolio::Portfolio;
 
 struct StandardParetoEvolution {}
 
@@ -140,9 +140,10 @@ impl EvolutionStrategy for StandardParetoEvolution {
         }
 
         // --- Final Evaluation After the Loop ---
-        let final_eval_result = population_evaluator(&population)
-            .await
-            .expect("Failed to evaluate final population");
+        let final_eval_result =
+            config
+                .sim_runner
+                .evaluate_population(&config, &population, athena_endpoint)?;
 
         // Create final portfolio structs using the final weights and *final* evaluation results
         let final_portfolio_structs =
