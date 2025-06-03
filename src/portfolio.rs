@@ -62,7 +62,7 @@ impl Portfolio {
     pub fn turn_objectives_to_score(&self) -> Vec<f64> {
         let mut scores = vec![0.; self.objectives.len()];
 
-        for (i, Box<objective>) in self.objectives.iter().enumerate() {
+        for (i, Box::<objective>) in self.objectives.iter().enumerate() {
             let to_push = match self.objective.direction() {
                 OptimizationDirection::Maximize => self.stats[i],
                 OptimizationDirection::Minimize => -self.stats[i],

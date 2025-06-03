@@ -4,7 +4,7 @@ use crate::evolution::portfolio_evolution::{
     EvolutionError, EvolutionResult, EvolutionStrategy, FinalPopulationSummary, SimRunnerStrategy,
     StandardEvolutionConfig,
 };
-use aegis_athena_contracts::portfolio::Portfolio;
+//use aegis_athena_contracts::portfolio::Portfolio;
 use rayon::prelude::*;
 use tracing::warn;
 

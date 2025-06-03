@@ -77,7 +77,6 @@ pub struct Returns<A: Aggregator> {
     direction: Option<OptimizationDirection>,
 }
 
-#[typetag::serde]
 impl<A: Aggregator + 'static> OptimizationObjective for Returns<A> {
     fn compute(&self, weights: &[f64], scenario: &[Vec<f64>]) -> Result<f64, AggregatorError> {
         // compute returns
@@ -166,7 +165,6 @@ pub struct SharpeRatio {
     direction: Option<OptimizationDirection>,
 }
 
-#[typetag::serde]
 impl OptimizationObjective for SharpeRatio {
     fn compute(&self, weights: &[f64], scenario: &[Vec<f64>]) -> Result<f64, AggregatorError> {
         let time_horizon_in_years = (self.time_horizon_in_days as f64) / 365.;
