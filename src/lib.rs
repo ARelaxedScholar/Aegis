@@ -12,7 +12,6 @@ use rand::prelude::*;
 use statrs::distribution::MultivariateNormal;
 
 // Modules
-pub mod athena_client;
 pub mod consts;
 pub mod evolution;
 pub mod k8s_job;

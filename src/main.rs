@@ -4,7 +4,6 @@ use crate::web_app::build_app;
 use std::{env, net::SocketAddr};
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
-mod athena_client;
 mod consts;
 mod evolution;
 mod k8s_job;

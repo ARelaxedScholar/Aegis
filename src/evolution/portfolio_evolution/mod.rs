@@ -1,4 +1,3 @@
-use crate::athena_client::evaluate_population_performance_in_grpc;
 use crate::k8s_job::evaluate_generation_in_k8s_job;
 use aegis_athena_contracts::common_consts::FLOAT_COMPARISON_EPSILON;
 use aegis_athena_contracts::common_portfolio_evolution_ds::compute_portfolio_performance;
@@ -212,22 +211,8 @@ pub fn make_evaluator(
                 }
                 .boxed()
             }
-            SimRunnerStrategy::AthenaK8sJob => {
-                // async path against Kubernetes
-                async move {
-                    let res = evaluate_generation_in_k8s_job(&cfg, &pop_owned).await?;
-                    Ok(res)
-                }
-                .boxed()
-            }
-            SimRunnerStrategy::AthenaGrpc => {
-                // async path against gRPC service
-                async move {
-                    let res =
-                        evaluate_population_performance_in_grpc(&cfg, &pop_owned, &ep).await?;
-                    Ok(res)
-                }
-                .boxed()
+            _ => {
+                unimplemented!("Yeah just crash here, this will be phased out in due time");
             }
         }
     }
