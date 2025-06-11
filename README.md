@@ -22,6 +22,6 @@ The main.rs file provides a basic server, for when I deploy the functions to a s
 ## Current Work
 - Slides presenting preliminary results: https://docs.google.com/presentation/d/1tD4gExPZPbOnIx00lG5FNrKtftqEut10JBwyxNEWIwc/
 - Informal Paper going over the current methodology (2024) : https://www.overleaf.com/read/rrfsdyrpypzq#f6c2d8
-- Informal Document of Project (My Personal Documentation): link will be updated soon.
+- Informal Document of Project (My Personal Documentation): https://a-relaxed-universe.vercel.app/1-cosmos/aegis/ 
 
 
